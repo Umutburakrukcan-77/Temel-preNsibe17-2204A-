@@ -1,0 +1,364 @@
+function model = load_model()
+% =========================================================================
+% LOAD_MODEL - Recon3D Model Yükleme ve Hazırlama
+% =========================================================================
+% Bu fonksiyon Recon3D_301.mat dosyasını yükler, kritik reaksiyon indekslerini
+% bulur, orijinal bound'ları saklar ve alternatif bypass yollarını kapatır.
+%
+% MASTER PROMPT v22 Uyumu:
+%   - Stoikiyometriye dokunmama kuralı
+%   - Sadece bound üzerinden müdahale
+%   - Bypass reaksiyonlarının kapatılması
+%
+% Çıktı:
+%   model - Hazırlanmış Recon3D modeli
+%       .rxnIdx      : Kritik reaksiyon indeksleri
+%       .originalBounds : Orijinal bound değerleri
+%
+% Referanslar:
+%   Brunk et al., 2018. Nature Biotechnology. Recon3D
+%
+% Tarih: 2024
+% Sürüm: v22
+% =========================================================================
+
+    fprintf('\n');
+    fprintf('╔══════════════════════════════════════════════════════════════════╗\n');
+    fprintf('║              RECON3D MODEL YÜKLEME VE HAZIRLAMA                  ║\n');
+    fprintf('╚══════════════════════════════════════════════════════════════════╝\n\n');
+    
+    % =====================================================================
+    % 1. MODEL DOSYASINI YÜKLE
+    % =====================================================================
+    fprintf('[MODEL] Recon3D_301.mat yükleniyor...\n');
+    
+    % Olası model konumları
+    possiblePaths = {
+        fullfile(pwd, 'Recon3D_301.mat'),
+        fullfile(pwd, '..', 'Recon3D_301.mat'),
+        fullfile(fileparts(mfilename('fullpath')), '..', 'Recon3D_301.mat')
+    };
+    
+    modelPath = '';
+    for i = 1:length(possiblePaths)
+        if exist(possiblePaths{i}, 'file')
+            modelPath = possiblePaths{i};
+            break;
+        end
+    end
+    
+    if isempty(modelPath)
+        error('[HATA] Recon3D_301.mat dosyası bulunamadı!');
+    end
+    
+    data = load(modelPath);
+    
+    % Model değişkenini bul
+    varNames = fieldnames(data);
+    modelVarName = '';
+    for i = 1:length(varNames)
+        if isstruct(data.(varNames{i})) && isfield(data.(varNames{i}), 'S')
+            modelVarName = varNames{i};
+            break;
+        end
+    end
+    
+    if isempty(modelVarName)
+        error('[HATA] Model yapısı bulunamadı!');
+    end
+    
+    model = data.(modelVarName);
+    fprintf('  ✓ Model yüklendi: %d reaksiyon, %d metabolit, %d gen\n', ...
+        length(model.rxns), length(model.mets), length(model.genes));
+    
+    % =====================================================================
+    % 2. KRİTİK REAKSİYON İNDEKSLERİNİ BUL
+    % =====================================================================
+    fprintf('[MODEL] Kritik reaksiyon indeksleri aranıyor...\n');
+    
+    % Struct'ı başlat
+    model.rxnIdx = struct();
+    
+    % ETC Reaksiyonları (Elektron Transport Zinciri)
+    % Referans: Recon3D içindeki mitokondriyal reaksiyonlar
+    
+    % Complex I: NADH:ubiquinone oxidoreductase
+    model.rxnIdx.CI = findRxnIndex(model, {'NADH2_u10mi', 'NADH2_u10m', 'CInSOD'});
+    
+    % Complex III: Cytochrome bc1 complex (Atovaquone hedefi!)
+    % Referans: Birth et al., 2014. Nature Communications - Atovaquone CIII inhibisyonu
+    model.rxnIdx.CIII = findRxnIndex(model, {'CYOR_u10mi', 'CYOR_u10m', 'CYORm'});
+    
+    % Complex IV: Cytochrome c oxidase
+    model.rxnIdx.CIV = findRxnIndex(model, {'CYOOm3i', 'CYOOm2i', 'CYOOm'});
+    
+    % ATP Synthase (Complex V)
+    model.rxnIdx.ATPS = findRxnIndex(model, {'ATPS4mi', 'ATPS4m', 'ATPSm'});
+    
+    % Glikoliz reaksiyonları
+    model.rxnIdx.HEX = findRxnIndex(model, {'HEX1', 'HK1', 'HK2'});
+    model.rxnIdx.PFK = findRxnIndex(model, {'PFK', 'PFK1', 'PFKL'});
+    model.rxnIdx.PYK = findRxnIndex(model, {'PYK', 'PKM', 'PKL'});
+    model.rxnIdx.LDH = findRxnIndex(model, {'LDH_L', 'LDH_Lm', 'LDHA'});
+    
+    % TCA döngüsü
+    model.rxnIdx.PDH = findRxnIndex(model, {'PDHm', 'PDH', 'PDHC'});
+    model.rxnIdx.CS = findRxnIndex(model, {'CSm', 'CS', 'CIT_syn'});
+    
+    % Exchange reaksiyonları
+    model.rxnIdx.EX_o2 = findExchangeRxn(model, 'o2');
+    model.rxnIdx.EX_glc = findExchangeRxn(model, 'glc_D');
+    model.rxnIdx.EX_lac = findExchangeRxn(model, 'lac_L');
+    model.rxnIdx.EX_gln = findExchangeRxn(model, 'gln_L');
+    model.rxnIdx.EX_co2 = findExchangeRxn(model, 'co2');
+    model.rxnIdx.EX_h2o = findExchangeRxn(model, 'h2o');
+    
+    % Biomass reaksiyonu
+    model.rxnIdx.biomass = findRxnIndex(model, {'biomass_reaction', 'biomass_maintenance', ...
+        'DM_biomass', 'Biomass', 'BIOMASS'});
+    
+    % İndeksleri raporla
+    fprintf('  ✓ ETC Reaksiyonları:\n');
+    fprintf('      CI (NADH2_u10mi)   : %d\n', model.rxnIdx.CI);
+    fprintf('      CIII (CYOR_u10mi)  : %d [Atovaquone hedefi]\n', model.rxnIdx.CIII);
+    fprintf('      CIV (CYOOm3i)      : %d\n', model.rxnIdx.CIV);
+    fprintf('      ATPS (ATPS4mi)     : %d\n', model.rxnIdx.ATPS);
+    fprintf('  ✓ Glikoliz Reaksiyonları:\n');
+    fprintf('      HEX: %d, PFK: %d, PYK: %d, LDH: %d\n', ...
+        model.rxnIdx.HEX, model.rxnIdx.PFK, model.rxnIdx.PYK, model.rxnIdx.LDH);
+    fprintf('  ✓ Exchange Reaksiyonları:\n');
+    fprintf('      EX_o2: %d, EX_glc: %d, EX_lac: %d, EX_gln: %d\n', ...
+        model.rxnIdx.EX_o2, model.rxnIdx.EX_glc, model.rxnIdx.EX_lac, model.rxnIdx.EX_gln);
+    fprintf('      Biomass: %d\n', model.rxnIdx.biomass);
+    
+    % =====================================================================
+    % 3. ORİJİNAL BOUND'LARI SAKLA
+    % =====================================================================
+    fprintf('[MODEL] Orijinal bound değerleri saklanıyor...\n');
+    
+    model.originalBounds = struct();
+    
+    % ETC orijinal üst sınırları
+    if model.rxnIdx.CI > 0
+        model.originalBounds.CI_ub = model.ub(model.rxnIdx.CI);
+    else
+        model.originalBounds.CI_ub = 1000;
+    end
+    
+    if model.rxnIdx.CIII > 0
+        model.originalBounds.CIII_ub = model.ub(model.rxnIdx.CIII);
+    else
+        model.originalBounds.CIII_ub = 1000;
+    end
+    
+    if model.rxnIdx.CIV > 0
+        model.originalBounds.CIV_ub = model.ub(model.rxnIdx.CIV);
+    else
+        model.originalBounds.CIV_ub = 1000;
+    end
+    
+    if model.rxnIdx.ATPS > 0
+        model.originalBounds.ATPS_ub = model.ub(model.rxnIdx.ATPS);
+    else
+        model.originalBounds.ATPS_ub = 1000;
+    end
+    
+    % O2 orijinal alt sınırı (uptake negatif)
+    if model.rxnIdx.EX_o2 > 0
+        model.originalBounds.O2_lb = model.lb(model.rxnIdx.EX_o2);
+    else
+        model.originalBounds.O2_lb = -1000;
+    end
+    
+    % Glikoliz orijinal üst sınırları
+    if model.rxnIdx.PFK > 0
+        model.originalBounds.PFK_ub = model.ub(model.rxnIdx.PFK);
+    else
+        model.originalBounds.PFK_ub = 1000;
+    end
+    
+    if model.rxnIdx.HEX > 0
+        model.originalBounds.HEX_ub = model.ub(model.rxnIdx.HEX);
+    else
+        model.originalBounds.HEX_ub = 1000;
+    end
+    
+    % Laktat export üst sınırı
+    if model.rxnIdx.EX_lac > 0
+        model.originalBounds.LAC_ub = model.ub(model.rxnIdx.EX_lac);
+    else
+        model.originalBounds.LAC_ub = 1000;
+    end
+    
+    % PDH orijinal üst sınırı (NADH feedback için)
+    if model.rxnIdx.PDH > 0
+        model.originalBounds.PDH_ub = model.ub(model.rxnIdx.PDH);
+    else
+        model.originalBounds.PDH_ub = 1000;
+    end
+    
+    fprintf('  ✓ Orijinal ETC UB: CI=%.0f, CIII=%.0f, CIV=%.0f, ATPS=%.0f\n', ...
+        model.originalBounds.CI_ub, model.originalBounds.CIII_ub, ...
+        model.originalBounds.CIV_ub, model.originalBounds.ATPS_ub);
+    fprintf('  ✓ Orijinal O2 LB: %.0f\n', model.originalBounds.O2_lb);
+    fprintf('  ✓ Orijinal Glikoliz UB: PFK=%.0f, HEX=%.0f\n', ...
+        model.originalBounds.PFK_ub, model.originalBounds.HEX_ub);
+    
+    % =====================================================================
+    % 4. ALTERNATİF BYPASS YOLLARINI KAPAT
+    % =====================================================================
+    fprintf('[MODEL] Alternatif elektron bypass yolları kapatılıyor...\n');
+    
+    % Bypass reaksiyonları listesi
+    % Referans: MASTER PROMPT v22 - NADH/NAD+ bypass kontrolü
+    % Bu reaksiyonlar, CIII inhibisyonunu "bypass" edebilecek alternatif yollardır
+    bypassRxns = {
+        'L_LACDcm',     % Laktat dehidrogenaz (cytochrome c coupled) - mitokondriyal
+        'SULFOX',       % Sülfür oksidasyonu - alternatif elektron akışı
+        'HMR_3859',     % Alternatif oksidaz benzeri
+        'G3PD2m',       % Glycerol-3-phosphate dehydrogenase (mitokondriyal)
+        'ETFQO',        % Electron-transferring flavoprotein:ubiquinone oxidoreductase
+        'FADH2ETC',     % FADH2 direkt ETC girişi
+        'SUCD1m',       % Succinate dehydrogenase (Complex II - bu dikkatli)
+        'DHODH',        % Dihydroorotate dehydrogenase
+        'CYOR_u10mi_2', % Alternatif CIII izoformu
+    };
+    
+    closedCount = 0;
+    for i = 1:length(bypassRxns)
+        rxnName = bypassRxns{i};
+        idx = find(strcmp(model.rxns, rxnName));
+        
+        if ~isempty(idx)
+            model.lb(idx) = 0;
+            model.ub(idx) = 0;
+            closedCount = closedCount + 1;
+            fprintf('    ✓ %s kapatıldı (idx=%d)\n', rxnName, idx);
+        end
+    end
+    
+    fprintf('  ✓ Toplam %d bypass reaksiyonu kapatıldı\n', closedCount);
+    
+    % =====================================================================
+    % 4b. OKSİJEN EXPORT YASAĞI VE O2 ÜRETEN REAKSİYONLARI KAPAT
+    % =====================================================================
+    fprintf('[MODEL] O2 üretimi/export yasaklanıyor (biyolojik gerçekçilik)...\n');
+    
+    % KURAL: Memeli hücreleri O2 üretemez! O2 sadece uptake edilir.
+    % EX_o2 reaksiyonunda: negatif = uptake, pozitif = export
+    % O2 export'u yasakla (UB=0 yap)
+    if model.rxnIdx.EX_o2 > 0
+        model.ub(model.rxnIdx.EX_o2) = 0;  % O2 export YASAK
+        fprintf('    ✓ EX_o2 export yasaklandı (UB=0)\n');
+    end
+    
+    % O2 üreten anormal reaksiyonları kapat
+    % Bu reaksiyonlar fizyolojik olmayan yönde çalışarak O2 üretebilir
+    o2ProducingRxns = {
+        'r0016',    % Fe2+/Fe3+ + O2 - tersi O2 üretir
+        'r0281',    % Putrescine oksidaz - tersi O2 üretir  
+        'CATp',     % Catalase peroksizom
+        'CATm',     % Catalase mitokondri
+        'CATr',     % Catalase ER
+        'SPODMn',   % Superoxide dismutase
+        'SPODMe',   % Superoxide dismutase extracellular
+    };
+    
+    o2ClosedCount = 0;
+    for i = 1:length(o2ProducingRxns)
+        rxnName = o2ProducingRxns{i};
+        idx = find(strcmp(model.rxns, rxnName));
+        
+        if ~isempty(idx)
+            % Bu reaksiyonların sadece ters yönünü (O2 üretimini) yasakla
+            % Genelde lb=0 yaparak negatif flux'u engelle
+            if model.lb(idx) < 0
+                model.lb(idx) = 0;  % Ters yönü kapat
+                o2ClosedCount = o2ClosedCount + 1;
+                fprintf('    ✓ %s ters yönü kapatıldı (LB=0, idx=%d)\n', rxnName, idx);
+            end
+        end
+    end
+    
+    fprintf('  ✓ Toplam %d O2 üreten reaksiyonun ters yönü kapatıldı\n', o2ClosedCount);
+    
+    % =====================================================================
+    % 5. MODEL HAZIR - ÖZET
+    % =====================================================================
+    fprintf('\n');
+    fprintf('┌──────────────────────────────────────────────────────────────────┐\n');
+    fprintf('│                    MODEL HAZIRLAMA TAMAM                         │\n');
+    fprintf('├──────────────────────────────────────────────────────────────────┤\n');
+    fprintf('│  Reaksiyon Sayısı  : %-43d │\n', length(model.rxns));
+    fprintf('│  Metabolit Sayısı  : %-43d │\n', length(model.mets));
+    fprintf('│  Gen Sayısı        : %-43d │\n', length(model.genes));
+    fprintf('│  Kapatılan Bypass  : %-43d │\n', closedCount);
+    fprintf('└──────────────────────────────────────────────────────────────────┘\n');
+    fprintf('\n');
+    
+end
+
+% =========================================================================
+% YARDIMCI FONKSİYON: Reaksiyon indeksi bulma
+% =========================================================================
+function idx = findRxnIndex(model, possibleNames)
+% Verilen isim listesinden modelde bulunan ilk reaksiyonun indeksini döndürür
+    idx = 0;
+    for i = 1:length(possibleNames)
+        foundIdx = find(strcmp(model.rxns, possibleNames{i}));
+        if ~isempty(foundIdx)
+            idx = foundIdx(1);
+            return;
+        end
+    end
+    
+    % Kısmi eşleşme dene
+    for i = 1:length(possibleNames)
+        foundIdx = find(contains(model.rxns, possibleNames{i}));
+        if ~isempty(foundIdx)
+            idx = foundIdx(1);
+            return;
+        end
+    end
+end
+
+% =========================================================================
+% YARDIMCI FONKSİYON: Exchange reaksiyon indeksi bulma
+% =========================================================================
+function idx = findExchangeRxn(model, metKey)
+% Verilen metabolit için exchange reaksiyonunu bulur
+    idx = 0;
+    
+    % Olası exchange reaksiyon formatları
+    possibleFormats = {
+        ['EX_' metKey '[e]'],      % EX_glc_D[e]
+        ['EX_' metKey '(e)'],      % EX_glc_D(e)
+        ['EX_' metKey '_e'],       % EX_glc_D_e
+        ['EX_' metKey 'e'],        % EX_glc_De
+        ['EX_' metKey],            % EX_glc_D
+        ['Ex_' metKey],            % Ex_glc_D
+        ['EX ' metKey],            % EX glc_D
+    };
+    
+    for i = 1:length(possibleFormats)
+        foundIdx = find(strcmp(model.rxns, possibleFormats{i}));
+        if ~isempty(foundIdx)
+            idx = foundIdx(1);
+            return;
+        end
+    end
+    
+    % Kısmi eşleşme dene
+    pattern = ['EX_' metKey];
+    foundIdx = find(contains(model.rxns, pattern, 'IgnoreCase', true));
+    if ~isempty(foundIdx)
+        % Öncelikle [e] içereni seç
+        for j = 1:length(foundIdx)
+            if contains(model.rxns{foundIdx(j)}, '[e]')
+                idx = foundIdx(j);
+                return;
+            end
+        end
+        idx = foundIdx(1);
+    end
+end

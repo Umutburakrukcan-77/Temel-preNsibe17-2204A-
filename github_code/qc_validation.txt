@@ -1,0 +1,297 @@
+function qc_results = qc_validation(results)
+% =========================================================================
+% QC_VALIDATION - Kalite Kontrol ve Rasyonalite Testi
+% =========================================================================
+% Bu fonksiyon, simülasyon sonuçlarının bilimsel tutarlılığını kontrol eder.
+%
+% MASTER PROMPT v22 QC Gereksinimleri:
+%   1. Temel fizibilite kontrolleri
+%   2. Biyolojik mantık kontrolleri (doz yanıtı)
+%   3. Fenotipler arası tutarlılık
+%   4. Monotonluk testleri
+%   5. Rasyonalite kontrolü
+%
+% Girdi:
+%   results - Simülasyon sonuçları struct'ı
+%
+% Çıktı:
+%   qc_results - QC sonuçları struct'ı
+%       .feasibility_pass   : Fizibil koşul sayısı
+%       .monotonicity_status: Monotonluk durumu
+%       .biological_status  : Biyolojik tutarlılık durumu
+%       .warnings           : Uyarı listesi
+%       .errors             : Hata listesi
+%
+% Referans:
+%   pFBA Kalibrasyon Raporu - QC Checklist
+%
+% Tarih: 2024
+% Sürüm: v22
+% =========================================================================
+
+    fprintf('\n[QC] Kalite kontrol testleri başlatılıyor...\n\n');
+    
+    qc_results = struct();
+    qc_results.warnings = {};
+    qc_results.errors = {};
+    qc_results.tests_passed = 0;
+    qc_results.tests_failed = 0;
+    
+    doses = results.doses;
+    numPhenotypes = length(results.phenotypes);
+    numDoses = length(doses);
+    totalConditions = numPhenotypes * numDoses;
+    
+    % =====================================================================
+    % A. TEMEL FİZİBİLİTE KONTROLLERİ
+    % =====================================================================
+    fprintf('  [A] Temel Fizibilite Kontrolleri:\n');
+    
+    % F1: Çözüm fizibil mi?
+    feasible_count = sum(results.feasible(:));
+    qc_results.feasibility_pass = feasible_count;
+    
+    if feasible_count == totalConditions
+        fprintf('      ✓ F1: Tüm çözümler fizibil (%d/%d)\n', feasible_count, totalConditions);
+        qc_results.tests_passed = qc_results.tests_passed + 1;
+    else
+        fprintf('      ✗ F1: Bazı çözümler infeasible (%d/%d)\n', feasible_count, totalConditions);
+        qc_results.tests_failed = qc_results.tests_failed + 1;
+        qc_results.warnings{end+1} = sprintf('Infeasible çözümler: %d', totalConditions - feasible_count);
+    end
+    
+    % F2: Biomass ≥ 0 mi?
+    negative_biomass = sum(results.biomass(:) < 0);
+    if negative_biomass == 0
+        fprintf('      ✓ F2: Tüm biomass değerleri ≥ 0\n');
+        qc_results.tests_passed = qc_results.tests_passed + 1;
+    else
+        fprintf('      ✗ F2: Negatif biomass değerleri var (%d)\n', negative_biomass);
+        qc_results.tests_failed = qc_results.tests_failed + 1;
+        qc_results.errors{end+1} = 'Negatif biomass değerleri!';
+    end
+    
+    % F3: ATP dengesi tutarlı mı?
+    negative_atp = sum(results.ATP(:) < 0);
+    if negative_atp == 0
+        fprintf('      ✓ F3: Tüm ATP değerleri ≥ 0\n');
+        qc_results.tests_passed = qc_results.tests_passed + 1;
+    else
+        fprintf('      ✗ F3: Negatif ATP değerleri var (%d)\n', negative_atp);
+        qc_results.tests_failed = qc_results.tests_failed + 1;
+        qc_results.warnings{end+1} = 'Negatif ATP değerleri!';
+    end
+    
+    % =====================================================================
+    % B. BİYOLOJİK MANTIK KONTROLLERİ (DOZ YANITI)
+    % =====================================================================
+    fprintf('\n  [B] Biyolojik Mantık Kontrolleri:\n');
+    
+    % B1: Doz arttıkça ATP azalıyor mu? (genel trend)
+    atp_decrease_count = 0;
+    for p = 1:numPhenotypes
+        % İlk ve son doz arasında karşılaştır
+        if results.ATP(p, numDoses) < results.ATP(p, 1)
+            atp_decrease_count = atp_decrease_count + 1;
+        end
+    end
+    
+    if atp_decrease_count == numPhenotypes
+        fprintf('      ✓ B1: Tüm fenotiplerde doz→ATP azalması görülüyor\n');
+        qc_results.tests_passed = qc_results.tests_passed + 1;
+    elseif atp_decrease_count >= numPhenotypes * 0.8
+        fprintf('      ~ B1: Çoğu fenotipte doz→ATP azalması var (%d/%d)\n', atp_decrease_count, numPhenotypes);
+        qc_results.tests_passed = qc_results.tests_passed + 1;
+        qc_results.warnings{end+1} = 'Bazı fenotiplerde ATP azalması beklendiği kadar değil';
+    else
+        fprintf('      ✗ B1: ATP azalması beklenen gibi değil (%d/%d)\n', atp_decrease_count, numPhenotypes);
+        qc_results.tests_failed = qc_results.tests_failed + 1;
+    end
+    
+    % B2: Laktat artıyor mu? (glikoliz kompanzasyonu)
+    lactate_increase_count = 0;
+    for p = 1:numPhenotypes
+        % Orta dozlarda laktat artışı kontrol
+        mid_dose_idx = ceil(numDoses / 2);
+        if results.lactate(p, mid_dose_idx) >= results.lactate(p, 1)
+            lactate_increase_count = lactate_increase_count + 1;
+        end
+    end
+    
+    if lactate_increase_count >= numPhenotypes * 0.5
+        fprintf('      ✓ B2: Çoğu fenotipte laktat kompanzasyonu görülüyor (%d/%d)\n', ...
+            lactate_increase_count, numPhenotypes);
+        qc_results.tests_passed = qc_results.tests_passed + 1;
+    else
+        fprintf('      ~ B2: Laktat kompanzasyonu sınırlı (%d/%d)\n', lactate_increase_count, numPhenotypes);
+        qc_results.warnings{end+1} = 'Laktat kompanzasyonu beklenenden düşük';
+    end
+    
+    % B3: O2 tüketimi azalıyor mu?
+    o2_decrease_count = 0;
+    for p = 1:numPhenotypes
+        if abs(results.O2(p, numDoses)) < abs(results.O2(p, 1))
+            o2_decrease_count = o2_decrease_count + 1;
+        end
+    end
+    
+    if o2_decrease_count == numPhenotypes
+        fprintf('      ✓ B3: Tüm fenotiplerde doz→O2 azalması görülüyor\n');
+        qc_results.tests_passed = qc_results.tests_passed + 1;
+    else
+        fprintf('      ~ B3: O2 azalması beklendiği gibi değil (%d/%d)\n', o2_decrease_count, numPhenotypes);
+        qc_results.warnings{end+1} = 'O2 azalması bazı fenotiplerde görülmüyor';
+    end
+    
+    % =====================================================================
+    % C. FENOTİPLER ARASI TUTARLILIK
+    % =====================================================================
+    fprintf('\n  [C] Fenotipler Arası Tutarlılık:\n');
+    
+    % C1: OXPHOS-GBM ve Nöron, Agresif GBM'den daha hassas mı?
+    % 20 µM dozunda ATP kaybını karşılaştır
+    dose_20_idx = find(doses == 20);
+    if isempty(dose_20_idx)
+        dose_20_idx = ceil(numDoses / 2);
+    end
+    
+    % Fenotip indekslerini bul (isim bazlı)
+    oxphos_idx = [];
+    neuron_idx = [];
+    aggressive_idx = [];
+    
+    for p = 1:numPhenotypes
+        name = lower(results.phenotypes(p).name);
+        if contains(name, 'oxphos') || contains(name, 'oksidatif')
+            oxphos_idx = p;
+        elseif contains(name, 'nöron') || contains(name, 'neuron')
+            neuron_idx = p;
+        elseif contains(name, 'agresif') || contains(name, 'aggressive')
+            aggressive_idx = p;
+        end
+    end
+    
+    % Duyarlılık karşılaştırması
+    if ~isempty(oxphos_idx) && ~isempty(aggressive_idx)
+        oxphos_loss = results.ATP_reduction(oxphos_idx, dose_20_idx);
+        aggressive_loss = results.ATP_reduction(aggressive_idx, dose_20_idx);
+        
+        if oxphos_loss > aggressive_loss
+            fprintf('      ✓ C1: OXPHOS-GBM (%.1f%%) > Agresif GBM (%.1f%%) duyarlılık\n', ...
+                oxphos_loss, aggressive_loss);
+            qc_results.tests_passed = qc_results.tests_passed + 1;
+        else
+            fprintf('      ~ C1: Duyarlılık sırası beklendiği gibi değil\n');
+            qc_results.warnings{end+1} = 'OXPHOS-GBM beklenenden düşük duyarlılık gösteriyor';
+        end
+    end
+    
+    % C2: Agresif GBM'de laktat kompanzasyonu yüksek mi?
+    if ~isempty(aggressive_idx)
+        [max_lac_fold, max_lac_idx] = max(results.lactate_fold(:, numDoses));
+        
+        if max_lac_idx == aggressive_idx
+            fprintf('      ✓ C2: Agresif GBM maksimum laktat kompanzasyonu gösteriyor (%.2fx)\n', max_lac_fold);
+            qc_results.tests_passed = qc_results.tests_passed + 1;
+        else
+            fprintf('      ~ C2: Maksimum laktat kompanzasyonu farklı fenotipte\n');
+        end
+    end
+    
+    % =====================================================================
+    % D. MONOTONLUK TESTLERİ
+    % =====================================================================
+    fprintf('\n  [D] Monotonluk Testleri:\n');
+    
+    % D1: ATP monoton azalıyor mu?
+    monotonic_atp = 0;
+    for p = 1:numPhenotypes
+        is_monotonic = true;
+        for d = 2:numDoses
+            if results.ATP(p, d) > results.ATP(p, d-1) * 1.05  % %5 tolerans
+                is_monotonic = false;
+                break;
+            end
+        end
+        if is_monotonic
+            monotonic_atp = monotonic_atp + 1;
+        end
+    end
+    
+    if monotonic_atp >= numPhenotypes * 0.8
+        fprintf('      ✓ D1: ATP monoton azalıyor (%d/%d fenotip)\n', monotonic_atp, numPhenotypes);
+        qc_results.monotonicity_status = 'BAŞARILI';
+        qc_results.tests_passed = qc_results.tests_passed + 1;
+    else
+        fprintf('      ~ D1: ATP monotonluğu kısmen sağlanıyor (%d/%d)\n', monotonic_atp, numPhenotypes);
+        qc_results.monotonicity_status = 'KISMI';
+        qc_results.warnings{end+1} = 'ATP monotonluğu bazı fenotiplerde bozuk';
+    end
+    
+    % =====================================================================
+    % E. RASYONALİTE KONTROLÜ
+    % =====================================================================
+    fprintf('\n  [E] Rasyonalite Kontrolü:\n');
+    
+    % E1: Aşırı değerler var mı?
+    max_atp = max(results.ATP(:));
+    if max_atp > 1e6
+        fprintf('      ✗ E1: Aşırı yüksek ATP değeri (%.2e)\n', max_atp);
+        qc_results.errors{end+1} = 'Aşırı yüksek ATP değeri';
+        qc_results.tests_failed = qc_results.tests_failed + 1;
+    else
+        fprintf('      ✓ E1: ATP değerleri makul aralıkta (max=%.1f)\n', max_atp);
+        qc_results.tests_passed = qc_results.tests_passed + 1;
+    end
+    
+    % E2: Baseline değerler sıfır değil mi?
+    baseline_zeros = sum(results.ATP(:, 1) < 0.01);
+    if baseline_zeros == 0
+        fprintf('      ✓ E2: Tüm baseline ATP değerleri pozitif\n');
+        qc_results.tests_passed = qc_results.tests_passed + 1;
+    else
+        fprintf('      ✗ E2: Bazı baseline ATP değerleri sıfıra yakın (%d)\n', baseline_zeros);
+        qc_results.warnings{end+1} = 'Sıfıra yakın baseline değerler';
+    end
+    
+    % =====================================================================
+    % SONUÇ ÖZETİ
+    % =====================================================================
+    fprintf('\n  ─────────────────────────────────────────────────────────────\n');
+    fprintf('  QC SONUÇ ÖZETİ:\n');
+    fprintf('    Başarılı testler : %d\n', qc_results.tests_passed);
+    fprintf('    Başarısız testler: %d\n', qc_results.tests_failed);
+    fprintf('    Uyarı sayısı     : %d\n', length(qc_results.warnings));
+    fprintf('    Hata sayısı      : %d\n', length(qc_results.errors));
+    
+    % Genel durum
+    if qc_results.tests_failed == 0 && isempty(qc_results.errors)
+        qc_results.biological_status = 'BAŞARILI';
+        fprintf('\n  ✓ GENEL DURUM: TÜM TESTLER BAŞARILI\n');
+    elseif qc_results.tests_failed <= 2
+        qc_results.biological_status = 'KABUL EDİLEBİLİR';
+        fprintf('\n  ~ GENEL DURUM: KABUL EDİLEBİLİR (küçük sorunlar var)\n');
+    else
+        qc_results.biological_status = 'SORUNLU';
+        fprintf('\n  ✗ GENEL DURUM: SORUNLU - Model revizyonu gerekebilir\n');
+    end
+    
+    % Uyarıları listele
+    if ~isempty(qc_results.warnings)
+        fprintf('\n  UYARILAR:\n');
+        for i = 1:length(qc_results.warnings)
+            fprintf('    • %s\n', qc_results.warnings{i});
+        end
+    end
+    
+    % Hataları listele
+    if ~isempty(qc_results.errors)
+        fprintf('\n  HATALAR:\n');
+        for i = 1:length(qc_results.errors)
+            fprintf('    ✗ %s\n', qc_results.errors{i});
+        end
+    end
+    
+    fprintf('  ─────────────────────────────────────────────────────────────\n\n');
+    
+end

@@ -1,0 +1,459 @@
+function generate_figures(results)
+% =========================================================================
+% GENERATE_FIGURES - Yayına Hazır Figür Üretimi
+% =========================================================================
+% Bu fonksiyon, simülasyon sonuçlarından yayına hazır figürler üretir.
+%
+% Üretilen Figürler:
+%   Fig01 - ATP vs Doz (Line plot)
+%   Fig02 - O2 vs Doz (Line plot)
+%   Fig03 - Laktat Mutlak Değerler vs Doz (Line plot) - YENİ!
+%   Fig03b - Laktat Fold-Change vs Doz (Line plot)
+%   Fig04 - ATP Reduction Heatmap
+%   Fig05a - Laktat Mutlak Heatmap - YENİ!
+%   Fig05b - Laktat Fold-Change Heatmap
+%   Fig06 - Multi-Panel Mechanism Summary
+%   Fig07 - Bar Comparison @ 20 µM
+%   Fig08-13 - Bar Comparison @ Her Doz
+%
+% Girdi:
+%   results - Simülasyon sonuçları (run_full_experiment'ten)
+%
+% Tarih: 2024
+% Sürüm: v22
+% =========================================================================
+
+    fprintf('\n[FİGÜR] Yayına hazır figürler üretiliyor...\n\n');
+    
+    % Proje dizini
+    if isfield(results, 'calibration')
+        projectRoot = pwd;
+    else
+        projectRoot = fileparts(fileparts(mfilename('fullpath')));
+    end
+    
+    % Proje kökünü doğrula (Recon3D_301.mat olmalı)
+    if ~exist(fullfile(projectRoot, 'Recon3D_301.mat'), 'file')
+        % code/ klasöründen çalışıyorsak bir üst klasöre git
+        if exist(fullfile(fileparts(projectRoot), 'Recon3D_301.mat'), 'file')
+            projectRoot = fileparts(projectRoot);
+        end
+    end
+    
+    figuresDir = fullfile(projectRoot, 'figures');
+    if ~exist(figuresDir, 'dir')
+        mkdir(figuresDir);
+    end
+    
+    % Parametreler
+    doses = results.doses;
+    numPhenotypes = length(results.phenotypes);
+    numDoses = length(doses);
+    
+    % Fenotip isimleri ve renkleri
+    phenotypeNames = cell(numPhenotypes, 1);
+    colors = zeros(numPhenotypes, 3);
+    for p = 1:numPhenotypes
+        phenotypeNames{p} = results.phenotypes(p).name;
+        colors(p, :) = results.phenotypes(p).color;
+    end
+    
+    % Kısa isimler (legend için)
+    legendNames = {
+        'Astrosit'
+        'Nöron'
+        'OXPHOS-GBM'
+        'Moderate'
+        'Warburg'
+        'Agresif'
+    };
+    if numPhenotypes ~= 6
+        legendNames = phenotypeNames;
+    end
+    
+    % =====================================================================
+    % FIG01: ATP vs DOZ (Mutlak Değerler)
+    % =====================================================================
+    fprintf('  [1/13] ATP vs Doz grafiği...\n');
+    
+    fig1 = figure('Position', [100, 100, 800, 500], 'Visible', 'off');
+    hold on;
+    
+    for p = 1:numPhenotypes
+        plot(doses, results.ATP(p, :), '-o', ...
+            'Color', colors(p, :), 'LineWidth', 2, 'MarkerSize', 8, ...
+            'MarkerFaceColor', colors(p, :), 'DisplayName', legendNames{p});
+    end
+    
+    xlabel('Atovaquone Dozu (µM)', 'FontSize', 12, 'FontWeight', 'bold');
+    ylabel('ATP Üretimi (Flux)', 'FontSize', 12, 'FontWeight', 'bold');
+    title('Atovaquone Doz-Yanıt: ATP Üretimi', 'FontSize', 14, 'FontWeight', 'bold');
+    legend('Location', 'eastoutside', 'FontSize', 10);
+    grid on;
+    xlim([min(doses)-2, max(doses)+2]);
+    set(gca, 'FontSize', 11);
+    hold off;
+    
+    saveas(fig1, fullfile(figuresDir, 'Fig01_ATP_vs_Dose.png'));
+    saveas(fig1, fullfile(figuresDir, 'Fig01_ATP_vs_Dose.fig'));
+    close(fig1);
+    
+    % =====================================================================
+    % FIG02: O2 vs DOZ (Mutlak Değerler)
+    % =====================================================================
+    fprintf('  [2/13] O2 vs Doz grafiği...\n');
+    
+    fig2 = figure('Position', [100, 100, 800, 500], 'Visible', 'off');
+    hold on;
+    
+    for p = 1:numPhenotypes
+        plot(doses, abs(results.O2(p, :)), '-s', ...
+            'Color', colors(p, :), 'LineWidth', 2, 'MarkerSize', 8, ...
+            'MarkerFaceColor', colors(p, :), 'DisplayName', legendNames{p});
+    end
+    
+    xlabel('Atovaquone Dozu (µM)', 'FontSize', 12, 'FontWeight', 'bold');
+    ylabel('O_2 Tüketimi (|Flux|)', 'FontSize', 12, 'FontWeight', 'bold');
+    title('Atovaquone Doz-Yanıt: Oksijen Tüketimi', 'FontSize', 14, 'FontWeight', 'bold');
+    legend('Location', 'eastoutside', 'FontSize', 10);
+    grid on;
+    xlim([min(doses)-2, max(doses)+2]);
+    set(gca, 'FontSize', 11);
+    hold off;
+    
+    saveas(fig2, fullfile(figuresDir, 'Fig02_O2_vs_Dose.png'));
+    saveas(fig2, fullfile(figuresDir, 'Fig02_O2_vs_Dose.fig'));
+    close(fig2);
+    
+    % =====================================================================
+    % FIG03: LAKTAT MUTLAK DEĞERLER vs DOZ (YENİ!)
+    % =====================================================================
+    fprintf('  [3/15] Laktat Mutlak Değerler grafiği...\n');
+    
+    fig3 = figure('Position', [100, 100, 800, 500], 'Visible', 'off');
+    hold on;
+    
+    for p = 1:numPhenotypes
+        plot(doses, results.lactate(p, :), '-^', ...
+            'Color', colors(p, :), 'LineWidth', 2, 'MarkerSize', 8, ...
+            'MarkerFaceColor', colors(p, :), 'DisplayName', legendNames{p});
+    end
+    
+    xlabel('Atovaquone Dozu (µM)', 'FontSize', 12, 'FontWeight', 'bold');
+    ylabel('Laktat Üretimi (Mutlak Flux)', 'FontSize', 12, 'FontWeight', 'bold');
+    title({'Atovaquone Doz-Yanıt: Laktat Üretimi (Mutlak)', ...
+           'Warburg fenotipi zaten yüksek bazal laktat üretir'}, ...
+           'FontSize', 14, 'FontWeight', 'bold');
+    legend('Location', 'eastoutside', 'FontSize', 10);
+    grid on;
+    xlim([min(doses)-2, max(doses)+2]);
+    set(gca, 'FontSize', 11);
+    
+    % Baseline değerleri göster
+    text(2, results.lactate(6,1)*1.05, sprintf('Agresif: %.0f', results.lactate(6,1)), ...
+        'FontSize', 9, 'Color', colors(6,:), 'FontWeight', 'bold');
+    text(2, results.lactate(2,1)*0.8, sprintf('Nöron: %.0f', results.lactate(2,1)), ...
+        'FontSize', 9, 'Color', colors(2,:), 'FontWeight', 'bold');
+    
+    hold off;
+    
+    saveas(fig3, fullfile(figuresDir, 'Fig03_Lactate_Absolute.png'));
+    saveas(fig3, fullfile(figuresDir, 'Fig03_Lactate_Absolute.fig'));
+    close(fig3);
+    
+    % =====================================================================
+    % FIG03b: LAKTAT FOLD-CHANGE vs DOZ (Relatif Değişim)
+    % =====================================================================
+    fprintf('  [3b/15] Laktat Fold-Change grafiği...\n');
+    
+    fig3b = figure('Position', [100, 100, 800, 500], 'Visible', 'off');
+    hold on;
+    
+    for p = 1:numPhenotypes
+        plot(doses, results.lactate_fold(p, :), '-^', ...
+            'Color', colors(p, :), 'LineWidth', 2, 'MarkerSize', 8, ...
+            'MarkerFaceColor', colors(p, :), 'DisplayName', legendNames{p});
+    end
+    
+    yline(1, '--k', 'Baseline', 'LineWidth', 1.5);
+    xlabel('Atovaquone Dozu (µM)', 'FontSize', 12, 'FontWeight', 'bold');
+    ylabel('Laktat Fold-Change (vs kendi baseline)', 'FontSize', 12, 'FontWeight', 'bold');
+    title({'Atovaquone Doz-Yanıt: Laktat Kompanzasyonu (Relatif)', ...
+           'Her fenotip kendi baseline''ına göre normalize edildi'}, ...
+           'FontSize', 14, 'FontWeight', 'bold');
+    legend('Location', 'eastoutside', 'FontSize', 10);
+    grid on;
+    xlim([min(doses)-2, max(doses)+2]);
+    set(gca, 'FontSize', 11);
+    hold off;
+    
+    saveas(fig3b, fullfile(figuresDir, 'Fig03b_Lactate_FoldChange.png'));
+    saveas(fig3b, fullfile(figuresDir, 'Fig03b_Lactate_FoldChange.fig'));
+    close(fig3b);
+    
+    % =====================================================================
+    % FIG04: ATP REDUCTION HEATMAP
+    % =====================================================================
+    fprintf('  [4/13] ATP Reduction Heatmap...\n');
+    
+    fig4 = figure('Position', [100, 100, 900, 500], 'Visible', 'off');
+    
+    % ATP reduction (100 - ATP%)
+    heatmap_data = results.ATP_reduction;
+    
+    h = heatmap(cellstr(string(doses) + " µM"), legendNames, heatmap_data);
+    h.Title = 'ATP Azalması (% Baseline''dan Kayıp)';
+    h.XLabel = 'Atovaquone Dozu';
+    h.YLabel = 'Fenotip';
+    h.Colormap = hot;
+    h.ColorLimits = [0 100];
+    h.CellLabelFormat = '%.1f%%';
+    h.FontSize = 10;
+    
+    saveas(fig4, fullfile(figuresDir, 'Fig04_ATP_Reduction_Heatmap.png'));
+    saveas(fig4, fullfile(figuresDir, 'Fig04_ATP_Reduction_Heatmap.fig'));
+    close(fig4);
+    
+    % =====================================================================
+    % FIG05a: LAKTAT MUTLAK HEATMAP (YENİ!)
+    % =====================================================================
+    fprintf('  [5a/15] Laktat Mutlak Heatmap...\n');
+    
+    fig5a = figure('Position', [100, 100, 900, 500], 'Visible', 'off');
+    
+    h = heatmap(cellstr(string(doses) + " µM"), legendNames, results.lactate);
+    h.Title = 'Laktat Üretimi (Mutlak Flux) - Warburg Fenotipi Görselleştirmesi';
+    h.XLabel = 'Atovaquone Dozu';
+    h.YLabel = 'Fenotip';
+    h.Colormap = parula;
+    h.CellLabelFormat = '%.0f';
+    h.FontSize = 10;
+    
+    saveas(fig5a, fullfile(figuresDir, 'Fig05a_Lactate_Absolute_Heatmap.png'));
+    saveas(fig5a, fullfile(figuresDir, 'Fig05a_Lactate_Absolute_Heatmap.fig'));
+    close(fig5a);
+    
+    % =====================================================================
+    % FIG05b: LAKTAT FOLD-CHANGE HEATMAP
+    % =====================================================================
+    fprintf('  [5b/15] Laktat Fold-Change Heatmap...\n');
+    
+    fig5b = figure('Position', [100, 100, 900, 500], 'Visible', 'off');
+    
+    h = heatmap(cellstr(string(doses) + " µM"), legendNames, results.lactate_fold);
+    h.Title = 'Laktat Fold-Change (Metabolik Kompanzasyon)';
+    h.XLabel = 'Atovaquone Dozu';
+    h.YLabel = 'Fenotip';
+    h.Colormap = cool;
+    h.CellLabelFormat = '%.2fx';
+    h.FontSize = 10;
+    
+    saveas(fig5b, fullfile(figuresDir, 'Fig05b_Lactate_FoldChange_Heatmap.png'));
+    saveas(fig5b, fullfile(figuresDir, 'Fig05b_Lactate_FoldChange_Heatmap.fig'));
+    close(fig5b);
+    
+    % =====================================================================
+    % FIG06: MULTI-PANEL MECHANISM SUMMARY
+    % =====================================================================
+    fprintf('  [6/13] Multi-Panel Mechanism Summary...\n');
+    
+    fig6 = figure('Position', [50, 50, 1400, 800], 'Visible', 'off');
+    
+    % Panel A: CIII Activity
+    subplot(2, 3, 1);
+    bar(results.CIII_capacity * 100, 'FaceColor', [0.3 0.6 0.9]);
+    set(gca, 'XTickLabel', cellstr(string(doses) + " µM"));
+    xlabel('Doz'); ylabel('CIII Kapasite (%)');
+    title('A) Complex III Aktivitesi');
+    ylim([0 110]);
+    grid on;
+    
+    % Panel B: O2 Uptake
+    subplot(2, 3, 2);
+    hold on;
+    for p = 1:numPhenotypes
+        plot(doses, results.O2_percent(p, :), '-o', ...
+            'Color', colors(p, :), 'LineWidth', 1.5, 'MarkerSize', 6);
+    end
+    xlabel('Doz (µM)'); ylabel('O_2 (% baseline)');
+    title('B) Oksijen Tüketimi');
+    grid on; hold off;
+    
+    % Panel C: ATP Production
+    subplot(2, 3, 3);
+    hold on;
+    for p = 1:numPhenotypes
+        plot(doses, results.ATP_percent(p, :), '-d', ...
+            'Color', colors(p, :), 'LineWidth', 1.5, 'MarkerSize', 6);
+    end
+    xlabel('Doz (µM)'); ylabel('ATP (% baseline)');
+    title('C) ATP Üretimi');
+    grid on; hold off;
+    
+    % Panel D: Lactate (Absolute)
+    subplot(2, 3, 4);
+    hold on;
+    for p = 1:numPhenotypes
+        plot(doses, results.lactate(p, :), '-^', ...
+            'Color', colors(p, :), 'LineWidth', 1.5, 'MarkerSize', 6);
+    end
+    xlabel('Doz (µM)'); ylabel('Laktat (flux)');
+    title('D) Laktat Export (Mutlak)');
+    grid on; hold off;
+    
+    % Panel E: Lactate Fold-Change
+    subplot(2, 3, 5);
+    hold on;
+    for p = 1:numPhenotypes
+        plot(doses, results.lactate_fold(p, :), '-v', ...
+            'Color', colors(p, :), 'LineWidth', 1.5, 'MarkerSize', 6);
+    end
+    yline(1, '--k');
+    xlabel('Doz (µM)'); ylabel('Laktat (fold)');
+    title('E) Laktat Fold-Change');
+    grid on; hold off;
+    
+    % Panel F: Legend
+    subplot(2, 3, 6);
+    hold on;
+    for p = 1:numPhenotypes
+        plot(NaN, NaN, '-o', 'Color', colors(p, :), 'LineWidth', 2, ...
+            'MarkerSize', 10, 'MarkerFaceColor', colors(p, :), ...
+            'DisplayName', legendNames{p});
+    end
+    legend('Location', 'best', 'FontSize', 11);
+    axis off;
+    title('F) Fenotip Renkleri');
+    hold off;
+    
+    sgtitle('Atovaquone Etki Mekanizması - Metabolik Panel', 'FontSize', 14, 'FontWeight', 'bold');
+    
+    saveas(fig6, fullfile(figuresDir, 'Fig06_Mechanism_MultiPanel.png'));
+    saveas(fig6, fullfile(figuresDir, 'Fig06_Mechanism_MultiPanel.fig'));
+    close(fig6);
+    
+    % =====================================================================
+    % FIG07: 20 µM BAR KARŞILAŞTIRMASI
+    % =====================================================================
+    fprintf('  [7/13] 20 µM Bar Karşılaştırması...\n');
+    
+    dose_20_idx = find(doses == 20);
+    if isempty(dose_20_idx)
+        dose_20_idx = 4; % 20 µM yoksa 4. indeks
+    end
+    
+    fig7 = figure('Position', [100, 100, 1000, 400], 'Visible', 'off');
+    
+    % Veri hazırla
+    atp_20 = results.ATP(:, dose_20_idx);
+    o2_20 = abs(results.O2(:, dose_20_idx));
+    lac_20 = results.lactate(:, dose_20_idx);
+    
+    x = 1:numPhenotypes;
+    
+    % ATP Bar
+    subplot(1, 3, 1);
+    b1 = bar(x, atp_20);
+    for p = 1:numPhenotypes
+        b1.FaceColor = 'flat';
+        b1.CData(p, :) = colors(p, :);
+    end
+    set(gca, 'XTick', x, 'XTickLabel', legendNames, 'XTickLabelRotation', 45);
+    ylabel('ATP (Flux)');
+    title('ATP Üretimi @ 20 µM');
+    grid on;
+    
+    % O2 Bar
+    subplot(1, 3, 2);
+    b2 = bar(x, o2_20);
+    for p = 1:numPhenotypes
+        b2.FaceColor = 'flat';
+        b2.CData(p, :) = colors(p, :);
+    end
+    set(gca, 'XTick', x, 'XTickLabel', legendNames, 'XTickLabelRotation', 45);
+    ylabel('O_2 Tüketimi (|Flux|)');
+    title('O_2 Tüketimi @ 20 µM');
+    grid on;
+    
+    % Lactate Bar
+    subplot(1, 3, 3);
+    b3 = bar(x, lac_20);
+    for p = 1:numPhenotypes
+        b3.FaceColor = 'flat';
+        b3.CData(p, :) = colors(p, :);
+    end
+    set(gca, 'XTick', x, 'XTickLabel', legendNames, 'XTickLabelRotation', 45);
+    ylabel('Laktat (Flux)');
+    title('Laktat Export @ 20 µM');
+    grid on;
+    
+    sgtitle('Fenotip Karşılaştırması - 20 µM Atovaquone', 'FontSize', 14, 'FontWeight', 'bold');
+    
+    saveas(fig7, fullfile(figuresDir, 'Fig07_Bar_Comparison_20uM.png'));
+    saveas(fig7, fullfile(figuresDir, 'Fig07_Bar_Comparison_20uM.fig'));
+    close(fig7);
+    
+    % =====================================================================
+    % FIG08-13: TÜM DOZLAR İÇİN FENOTİP KARŞILAŞTIRMASI
+    % =====================================================================
+    fprintf('  [8-13] Tüm dozlar için bar grafikleri...\n');
+    
+    for d = 1:length(doses)
+        dose_val = doses(d);
+        figNum = 7 + d;
+        
+        fig_dose = figure('Position', [100, 100, 1200, 400], 'Visible', 'off');
+        
+        % Veri hazırla
+        atp_d = results.ATP(:, d);
+        o2_d = abs(results.O2(:, d));
+        lac_d = results.lactate(:, d);
+        
+        x = 1:numPhenotypes;
+        
+        % ATP Bar
+        subplot(1, 3, 1);
+        b1 = bar(x, atp_d);
+        b1.FaceColor = 'flat';
+        for pp = 1:numPhenotypes
+            b1.CData(pp, :) = colors(pp, :);
+        end
+        set(gca, 'XTick', x, 'XTickLabel', legendNames, 'XTickLabelRotation', 45);
+        ylabel('ATP (Flux)', 'FontWeight', 'bold');
+        title(sprintf('ATP Üretimi @ %d µM', dose_val), 'FontWeight', 'bold');
+        grid on;
+        
+        % O2 Bar
+        subplot(1, 3, 2);
+        b2 = bar(x, o2_d);
+        b2.FaceColor = 'flat';
+        for pp = 1:numPhenotypes
+            b2.CData(pp, :) = colors(pp, :);
+        end
+        set(gca, 'XTick', x, 'XTickLabel', legendNames, 'XTickLabelRotation', 45);
+        ylabel('O_2 (|Flux|)', 'FontWeight', 'bold');
+        title(sprintf('O_2 Tüketimi @ %d µM', dose_val), 'FontWeight', 'bold');
+        grid on;
+        
+        % Lactate Bar
+        subplot(1, 3, 3);
+        b3 = bar(x, lac_d);
+        b3.FaceColor = 'flat';
+        for pp = 1:numPhenotypes
+            b3.CData(pp, :) = colors(pp, :);
+        end
+        set(gca, 'XTick', x, 'XTickLabel', legendNames, 'XTickLabelRotation', 45);
+        ylabel('Laktat (Flux)', 'FontWeight', 'bold');
+        title(sprintf('Laktat Export @ %d µM', dose_val), 'FontWeight', 'bold');
+        grid on;
+        
+        sgtitle(sprintf('Fenotip Karşılaştırması - %d µM Atovaquone', dose_val), ...
+            'FontSize', 14, 'FontWeight', 'bold');
+        
+        saveas(fig_dose, fullfile(figuresDir, sprintf('Fig%02d_Bar_Comparison_%duM.png', figNum, dose_val)));
+        saveas(fig_dose, fullfile(figuresDir, sprintf('Fig%02d_Bar_Comparison_%duM.fig', figNum, dose_val)));
+        close(fig_dose);
+    end
+    
+    fprintf('\n[FİGÜR] Tüm figürler kaydedildi: %s\n', figuresDir);
+end

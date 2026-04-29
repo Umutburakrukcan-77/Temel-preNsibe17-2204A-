@@ -1,0 +1,53 @@
+═══════════════════════════════════════════════════════════════════
+ ATOVAQUONE-GBM pFBA SİMÜLASYON SONUÇLARI (v22)
+═══════════════════════════════════════════════════════════════════
+
+Tarih: 2025-12-18 14:15:13
+Model: Recon3D_301
+Yöntem: pFBA (Lewis et al., 2010)
+Fenotip sayısı: 6
+Doz sayısı: 6
+Toplam koşul: 36
+
+───────────────────────────────────────────────────────────────────
+ DOZ-CIII KALİBRASYONU
+───────────────────────────────────────────────────────────────────
+   0 µM → CIII 100%: 0 µM: Kontrol koşulu - CIII %100 aktif, Atovaquone yok
+   5 µM → CIII 82%: 5 µM: Fiorillo 2016 - OCR düşüşü başlangıcı, ECAR hafif artış (~18% CIII inhibisyonu)
+  10 µM → CIII 60%: 10 µM: Fiorillo 2016 - Belirgin OCR baskılanması, glikoliz kompanzasyonu başlar (~40% inhibisyon)
+  20 µM → CIII 35%: 20 µM: Takabe 2018 / Kapur 2022 - U87/LN-18 IC50 bandı, OXPHOS çöküşü (~65% inhibisyon)
+  30 µM → CIII 18%: 30 µM: Sbirkov 2021 - OXPHOS büyük ölçüde kapanmış, minimal residual aktivite (~82% inhibisyon)
+  50 µM → CIII 8%: 50 µM: Maksimal/saturasyon inhibisyonu - sadece ~8% residual CIII aktivitesi kaldı
+
+───────────────────────────────────────────────────────────────────
+ FENOTİP PARAMETRELERİ
+───────────────────────────────────────────────────────────────────
+  Sağlıklı Astrosit: OXPHOS=1.00, GLY=0.15, Komp=1.30
+  Sağlıklı Nöron: OXPHOS=1.20, GLY=0.08, Komp=1.10
+  OXPHOS-GBM: OXPHOS=1.30, GLY=0.25, Komp=1.40
+  Moderate GBM: OXPHOS=0.70, GLY=0.50, Komp=1.60
+  Warburg GBM: OXPHOS=0.40, GLY=0.80, Komp=1.90
+  Agresif GBM: OXPHOS=0.30, GLY=1.00, Komp=2.20
+
+───────────────────────────────────────────────────────────────────
+ TEMEL BULGULAR
+───────────────────────────────────────────────────────────────────
+  • 20 µM'de en hassas fenotip: Sağlıklı Astrosit (ATP kaybı: 64.0%)
+  • 20 µM'de en dirençli fenotip: Agresif GBM (ATP kaybı: 42.7%)
+  • 50 µM'de maksimum laktat kompanzasyonu: Agresif GBM (2.10x)
+
+───────────────────────────────────────────────────────────────────
+ QC SONUÇLARI
+───────────────────────────────────────────────────────────────────
+  Fizibilite testleri: 36/36 BAŞARILI
+  Monotonluk testleri: BAŞARILI
+  Biyolojik tutarlılık: BAŞARILI
+
+───────────────────────────────────────────────────────────────────
+ REFERANSLAR
+───────────────────────────────────────────────────────────────────
+  Lewis et al., 2010. Mol Syst Biol. pFBA metodolojisi
+  Brunk et al., 2018. Nat Biotechnol. Recon3D
+  Takabe et al., 2018. Pharmaceutics. GBM IC50
+  Fiorillo et al., 2016. Oncotarget. OCR/ECAR
+  Birth et al., 2014. Nat Commun. CIII yapısı

@@ -1,0 +1,507 @@
+% =========================================================================
+% RUN_FULL_EXPERIMENT - Tam Fenotip × Doz Simülasyonu
+% =========================================================================
+% Bu script, Atovaquone-GBM pFBA simülasyon platformunun ana çalıştırma
+% dosyasıdır. Tüm fenotip ve doz kombinasyonlarını tarar.
+%
+% MASTER PROMPT v22 Uyumu:
+%   - Tüm modüller entegre
+%   - Progress bar ve ETA gösterimi
+%   - Sonuçların kaydedilmesi
+%   - QC kontrolü
+%
+% Çıktılar:
+%   - results/simulation_results_v22.mat
+%   - results/summary_v22.txt
+%   - Console özet tabloları
+%
+% Kullanım:
+%   >> run_full_experiment
+%
+% Tarih: 2024
+% Sürüm: v22
+% =========================================================================
+
+clear; clc; close all;
+
+fprintf('\n');
+fprintf('████████████████████████████████████████████████████████████████████\n');
+fprintf('██                                                                ██\n');
+fprintf('██     ATOVAQUONE-GBM pFBA SİMÜLASYON PLATFORMU v22              ██\n');
+fprintf('██                     ██\n');
+fprintf('██                                                                ██\n');
+fprintf('████████████████████████████████████████████████████████████████████\n');
+fprintf('\n');
+fprintf('Başlangıç: %s\n\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
+
+totalStartTime = tic;
+
+% =========================================================================
+% 1. ORTAM KURULUMU
+% =========================================================================
+fprintf('═══════════════════════════════════════════════════════════════════\n');
+fprintf(' ADIM 1: ORTAM KURULUMU\n');
+fprintf('═══════════════════════════════════════════════════════════════════\n');
+
+addpath(genpath('code'));
+init_env();
+
+% =========================================================================
+% 2. MODEL YÜKLEME
+% =========================================================================
+fprintf('═══════════════════════════════════════════════════════════════════\n');
+fprintf(' ADIM 2: MODEL YÜKLEME\n');
+fprintf('═══════════════════════════════════════════════════════════════════\n');
+
+baseModel = load_model();
+
+% =========================================================================
+% 3. FENOTİP VE KALİBRASYON
+% =========================================================================
+fprintf('═══════════════════════════════════════════════════════════════════\n');
+fprintf(' ADIM 3: FENOTİP VE DOZ KALİBRASYONU\n');
+fprintf('═══════════════════════════════════════════════════════════════════\n');
+
+phenotypes = configure_phenotypes();
+calibration = get_dose_calibration();
+
+doses = calibration.doses;
+CIII_capacity = calibration.CIII_capacity;
+numPhenotypes = length(phenotypes);
+numDoses = length(doses);
+totalConditions = numPhenotypes * numDoses;
+
+fprintf('\n[SİMÜLASYON] Toplam koşul sayısı: %d (%d fenotip × %d doz)\n\n', ...
+    totalConditions, numPhenotypes, numDoses);
+
+% =========================================================================
+% 4. SONUÇ MATRİSLERİNİ OLUŞTUR
+% =========================================================================
+fprintf('═══════════════════════════════════════════════════════════════════\n');
+fprintf(' ADIM 4: SONUÇ MATRİSLERİ HAZIRLANIYOR\n');
+fprintf('═══════════════════════════════════════════════════════════════════\n');
+
+results = struct();
+results.phenotypes = phenotypes;
+results.doses = doses;
+results.CIII_capacity = CIII_capacity;
+results.calibration = calibration;
+
+% Ana metrik matrisleri (fenotip × doz)
+results.biomass = zeros(numPhenotypes, numDoses);
+results.ATP = zeros(numPhenotypes, numDoses);
+results.O2 = zeros(numPhenotypes, numDoses);
+results.lactate = zeros(numPhenotypes, numDoses);
+results.glucose = zeros(numPhenotypes, numDoses);
+results.glutamine = zeros(numPhenotypes, numDoses);
+results.CIII_flux = zeros(numPhenotypes, numDoses);
+results.CI_flux = zeros(numPhenotypes, numDoses);
+results.CIV_flux = zeros(numPhenotypes, numDoses);
+results.feasible = false(numPhenotypes, numDoses);
+results.method = cell(numPhenotypes, numDoses);
+
+fprintf('  ✓ Sonuç matrisleri oluşturuldu (%d × %d)\n\n', numPhenotypes, numDoses);
+
+% =========================================================================
+% 5. ANA SİMÜLASYON DÖNGÜSÜ
+% =========================================================================
+fprintf('═══════════════════════════════════════════════════════════════════\n');
+fprintf(' ADIM 5: pFBA SİMÜLASYONU BAŞLIYOR\n');
+fprintf('═══════════════════════════════════════════════════════════════════\n\n');
+
+conditionCount = 0;
+simStartTime = tic;
+
+for p = 1:numPhenotypes
+    phenotype = phenotypes(p);
+    
+    for d = 1:numDoses
+        conditionCount = conditionCount + 1;
+        dose = doses(d);
+        ciii_cap = CIII_capacity(d);
+        
+        % Progress gösterimi
+        elapsed = toc(simStartTime);
+        if conditionCount > 1
+            avgTime = elapsed / (conditionCount - 1);
+            remaining = avgTime * (totalConditions - conditionCount + 1);
+            eta_str = formatDuration(remaining);
+        else
+            eta_str = '...';
+        end
+        
+        fprintf('[%2d/%2d] %-18s @ %2d µM (CIII=%.0f%%) ... ', ...
+            conditionCount, totalConditions, phenotype.name, dose, ciii_cap*100);
+        
+        % Model kopyası al
+        model = baseModel;
+        
+        % Atovaquone uygula
+        model = apply_atovaquone(model, phenotype, ciii_cap);
+        
+        % pFBA çöz
+        solution = run_pfba(model);
+        
+        % Sonuçları kaydet
+        results.biomass(p, d) = solution.biomass;
+        results.ATP(p, d) = solution.ATP;
+        results.O2(p, d) = solution.O2;
+        results.lactate(p, d) = solution.lactate;
+        results.glucose(p, d) = solution.glucose;
+        results.glutamine(p, d) = solution.glutamine;
+        results.CIII_flux(p, d) = solution.CIII_flux;
+        results.CI_flux(p, d) = solution.CI_flux;
+        results.CIV_flux(p, d) = solution.CIV_flux;
+        results.feasible(p, d) = solution.feasible;
+        results.method{p, d} = solution.method;
+        
+        % Kısa sonuç göster
+        if solution.feasible
+            fprintf('ATP=%.1f, O2=%.1f, Lac=%.1f [%s] ETA: %s\n', ...
+                solution.ATP, abs(solution.O2), solution.lactate, ...
+                solution.method, eta_str);
+        else
+            fprintf('INFEASIBLE [%s] ETA: %s\n', solution.message, eta_str);
+        end
+    end
+    fprintf('\n');
+end
+
+simElapsed = toc(simStartTime);
+fprintf('[SİMÜLASYON] Tamamlandı: %.1f saniye\n\n', simElapsed);
+
+% =========================================================================
+% 6. TÜRETİLMİŞ METRİKLER
+% =========================================================================
+fprintf('═══════════════════════════════════════════════════════════════════\n');
+fprintf(' ADIM 6: TÜRETİLMİŞ METRİKLER HESAPLANIYOR\n');
+fprintf('═══════════════════════════════════════════════════════════════════\n');
+
+% Baseline değerler (0 µM dozu)
+baseline_ATP = results.ATP(:, 1);
+baseline_O2 = abs(results.O2(:, 1));
+baseline_lactate = results.lactate(:, 1);
+
+% % of baseline hesaplama
+results.ATP_percent = zeros(numPhenotypes, numDoses);
+results.O2_percent = zeros(numPhenotypes, numDoses);
+results.lactate_fold = zeros(numPhenotypes, numDoses);
+results.ATP_reduction = zeros(numPhenotypes, numDoses);
+
+for p = 1:numPhenotypes
+    for d = 1:numDoses
+        % ATP % baseline
+        if baseline_ATP(p) > 0
+            results.ATP_percent(p, d) = (results.ATP(p, d) / baseline_ATP(p)) * 100;
+        else
+            results.ATP_percent(p, d) = 0;
+        end
+        
+        % O2 % baseline
+        if baseline_O2(p) > 0
+            results.O2_percent(p, d) = (abs(results.O2(p, d)) / baseline_O2(p)) * 100;
+        else
+            results.O2_percent(p, d) = 0;
+        end
+        
+        % Laktat fold-change
+        if baseline_lactate(p) > 0.01
+            results.lactate_fold(p, d) = results.lactate(p, d) / baseline_lactate(p);
+        else
+            results.lactate_fold(p, d) = 1;  % Baseline sıfırsa fold=1
+        end
+        
+        % ATP reduction
+        results.ATP_reduction(p, d) = 100 - results.ATP_percent(p, d);
+    end
+end
+
+% OXPHOS/GLY ratio
+results.OXPHOS_GLY_ratio = zeros(numPhenotypes, numDoses);
+for p = 1:numPhenotypes
+    for d = 1:numDoses
+        if results.lactate(p, d) > 0.01
+            results.OXPHOS_GLY_ratio(p, d) = results.ATP(p, d) / results.lactate(p, d);
+        else
+            results.OXPHOS_GLY_ratio(p, d) = results.ATP(p, d) * 100;  % OXPHOS dominant
+        end
+    end
+end
+
+fprintf('  ✓ ATP %% baseline hesaplandı\n');
+fprintf('  ✓ O2 %% baseline hesaplandı\n');
+fprintf('  ✓ Laktat fold-change hesaplandı\n');
+fprintf('  ✓ OXPHOS/GLY ratio hesaplandı\n\n');
+
+% =========================================================================
+% 7. QC KONTROLLERİ
+% =========================================================================
+fprintf('═══════════════════════════════════════════════════════════════════\n');
+fprintf(' ADIM 7: KALİTE KONTROL (QC)\n');
+fprintf('═══════════════════════════════════════════════════════════════════\n');
+
+qc_results = qc_validation(results);
+
+% =========================================================================
+% 8. KONSOL ÖZET TABLOLARI
+% =========================================================================
+fprintf('\n═══════════════════════════════════════════════════════════════════\n');
+fprintf(' ADIM 8: SONUÇ TABLOLARI\n');
+fprintf('═══════════════════════════════════════════════════════════════════\n\n');
+
+% Fenotip isimleri
+phenotypeNames = cell(numPhenotypes, 1);
+for p = 1:numPhenotypes
+    phenotypeNames{p} = phenotypes(p).name;
+end
+
+% ATP Tablosu (Mutlak)
+fprintf('┌─────────────────────────────────────────────────────────────────────────────┐\n');
+fprintf('│                         ATP ÜRETİMİ (Mutlak Flux)                          │\n');
+fprintf('├─────────────────────┬');
+for d = 1:numDoses
+    fprintf('───────────');
+    if d < numDoses, fprintf('┬'); else, fprintf('┤\n'); end
+end
+fprintf('│ Fenotip             │');
+for d = 1:numDoses
+    fprintf(' %4d µM  ', doses(d));
+    if d < numDoses, fprintf('│'); else, fprintf('│\n'); end
+end
+fprintf('├─────────────────────┼');
+for d = 1:numDoses
+    fprintf('──────────');
+    if d < numDoses, fprintf('┼'); else, fprintf('┤\n'); end
+end
+
+for p = 1:numPhenotypes
+    fprintf('│ %-19s │', phenotypeNames{p});
+    for d = 1:numDoses
+        fprintf(' %8.1f ', results.ATP(p, d));
+        if d < numDoses, fprintf('│'); else, fprintf('│\n'); end
+    end
+end
+fprintf('└─────────────────────┴');
+for d = 1:numDoses
+    fprintf('──────────');
+    if d < numDoses, fprintf('┴'); else, fprintf('┘\n'); end
+end
+
+fprintf('\n');
+
+% ATP % Baseline Tablosu
+fprintf('┌─────────────────────────────────────────────────────────────────────────────┐\n');
+fprintf('│                        ATP ÜRETİMİ (%% Baseline)                            │\n');
+fprintf('├─────────────────────┬');
+for d = 1:numDoses
+    fprintf('───────────');
+    if d < numDoses, fprintf('┬'); else, fprintf('┤\n'); end
+end
+fprintf('│ Fenotip             │');
+for d = 1:numDoses
+    fprintf(' %4d µM  ', doses(d));
+    if d < numDoses, fprintf('│'); else, fprintf('│\n'); end
+end
+fprintf('├─────────────────────┼');
+for d = 1:numDoses
+    fprintf('──────────');
+    if d < numDoses, fprintf('┼'); else, fprintf('┤\n'); end
+end
+
+for p = 1:numPhenotypes
+    fprintf('│ %-19s │', phenotypeNames{p});
+    for d = 1:numDoses
+        fprintf(' %7.1f%% ', results.ATP_percent(p, d));
+        if d < numDoses, fprintf('│'); else, fprintf('│\n'); end
+    end
+end
+fprintf('└─────────────────────┴');
+for d = 1:numDoses
+    fprintf('──────────');
+    if d < numDoses, fprintf('┴'); else, fprintf('┘\n'); end
+end
+
+fprintf('\n');
+
+% Laktat Fold-Change Tablosu
+fprintf('┌─────────────────────────────────────────────────────────────────────────────┐\n');
+fprintf('│                      LAKTAT FOLD-CHANGE (vs Baseline)                      │\n');
+fprintf('├─────────────────────┬');
+for d = 1:numDoses
+    fprintf('───────────');
+    if d < numDoses, fprintf('┬'); else, fprintf('┤\n'); end
+end
+fprintf('│ Fenotip             │');
+for d = 1:numDoses
+    fprintf(' %4d µM  ', doses(d));
+    if d < numDoses, fprintf('│'); else, fprintf('│\n'); end
+end
+fprintf('├─────────────────────┼');
+for d = 1:numDoses
+    fprintf('──────────');
+    if d < numDoses, fprintf('┼'); else, fprintf('┤\n'); end
+end
+
+for p = 1:numPhenotypes
+    fprintf('│ %-19s │', phenotypeNames{p});
+    for d = 1:numDoses
+        fprintf(' %7.2fx ', results.lactate_fold(p, d));
+        if d < numDoses, fprintf('│'); else, fprintf('│\n'); end
+    end
+end
+fprintf('└─────────────────────┴');
+for d = 1:numDoses
+    fprintf('──────────');
+    if d < numDoses, fprintf('┴'); else, fprintf('┘\n'); end
+end
+
+% =========================================================================
+% 9. SONUÇLARI KAYDET
+% =========================================================================
+fprintf('\n═══════════════════════════════════════════════════════════════════\n');
+fprintf(' ADIM 9: SONUÇLAR KAYDEDİLİYOR\n');
+fprintf('═══════════════════════════════════════════════════════════════════\n');
+
+% Proje kök dizini
+projectRoot = fileparts(mfilename('fullpath'));
+if isempty(projectRoot)
+    projectRoot = pwd;
+end
+projectRoot = fileparts(projectRoot);  % code/ üst dizini
+
+resultsDir = fullfile(projectRoot, 'results');
+if ~exist(resultsDir, 'dir')
+    mkdir(resultsDir);
+end
+
+% .mat dosyası
+matFile = fullfile(resultsDir, 'simulation_results_v22.mat');
+results.qc = qc_results;
+results.timestamp = datestr(now, 'yyyy-mm-dd HH:MM:SS');
+results.version = 'v22';
+save(matFile, 'results');
+fprintf('  ✓ Sonuçlar kaydedildi: %s\n', matFile);
+
+% Summary text dosyası
+summaryFile = fullfile(resultsDir, 'summary_v22.txt');
+fid = fopen(summaryFile, 'w');
+
+fprintf(fid, '═══════════════════════════════════════════════════════════════════\n');
+fprintf(fid, ' ATOVAQUONE-GBM pFBA SİMÜLASYON SONUÇLARI (v22)\n');
+fprintf(fid, '═══════════════════════════════════════════════════════════════════\n\n');
+fprintf(fid, 'Tarih: %s\n', results.timestamp);
+fprintf(fid, 'Model: Recon3D_301\n');
+fprintf(fid, 'Yöntem: pFBA (Lewis et al., 2010)\n');
+fprintf(fid, 'Fenotip sayısı: %d\n', numPhenotypes);
+fprintf(fid, 'Doz sayısı: %d\n', numDoses);
+fprintf(fid, 'Toplam koşul: %d\n\n', totalConditions);
+
+fprintf(fid, '───────────────────────────────────────────────────────────────────\n');
+fprintf(fid, ' DOZ-CIII KALİBRASYONU\n');
+fprintf(fid, '───────────────────────────────────────────────────────────────────\n');
+for d = 1:numDoses
+    fprintf(fid, '  %2d µM → CIII %.0f%%: %s\n', doses(d), CIII_capacity(d)*100, calibration.basis{d});
+end
+
+fprintf(fid, '\n───────────────────────────────────────────────────────────────────\n');
+fprintf(fid, ' FENOTİP PARAMETRELERİ\n');
+fprintf(fid, '───────────────────────────────────────────────────────────────────\n');
+for p = 1:numPhenotypes
+    fprintf(fid, '  %s: OXPHOS=%.2f, GLY=%.2f, Komp=%.2f\n', ...
+        phenotypes(p).name, phenotypes(p).OXPHOS_capacity, ...
+        phenotypes(p).GLY_capacity, phenotypes(p).compensation_factor);
+end
+
+fprintf(fid, '\n───────────────────────────────────────────────────────────────────\n');
+fprintf(fid, ' TEMEL BULGULAR\n');
+fprintf(fid, '───────────────────────────────────────────────────────────────────\n');
+
+% En hassas fenotip (20 µM'de en fazla ATP kaybı)
+dose20_idx = find(doses == 20);
+if isempty(dose20_idx), dose20_idx = 4; end
+[maxLoss, maxLossIdx] = max(results.ATP_reduction(:, dose20_idx));
+fprintf(fid, '  • 20 µM''de en hassas fenotip: %s (ATP kaybı: %.1f%%)\n', ...
+    phenotypes(maxLossIdx).name, maxLoss);
+
+% En dirençli fenotip
+[minLoss, minLossIdx] = min(results.ATP_reduction(:, dose20_idx));
+fprintf(fid, '  • 20 µM''de en dirençli fenotip: %s (ATP kaybı: %.1f%%)\n', ...
+    phenotypes(minLossIdx).name, minLoss);
+
+% Maksimum laktat kompanzasyonu
+dose50_idx = find(doses == 50);
+if isempty(dose50_idx), dose50_idx = numDoses; end
+[maxLac, maxLacIdx] = max(results.lactate_fold(:, dose50_idx));
+fprintf(fid, '  • 50 µM''de maksimum laktat kompanzasyonu: %s (%.2fx)\n', ...
+    phenotypes(maxLacIdx).name, maxLac);
+
+fprintf(fid, '\n───────────────────────────────────────────────────────────────────\n');
+fprintf(fid, ' QC SONUÇLARI\n');
+fprintf(fid, '───────────────────────────────────────────────────────────────────\n');
+fprintf(fid, '  Fizibilite testleri: %d/%d BAŞARILI\n', qc_results.feasibility_pass, totalConditions);
+fprintf(fid, '  Monotonluk testleri: %s\n', qc_results.monotonicity_status);
+fprintf(fid, '  Biyolojik tutarlılık: %s\n', qc_results.biological_status);
+
+fprintf(fid, '\n───────────────────────────────────────────────────────────────────\n');
+fprintf(fid, ' REFERANSLAR\n');
+fprintf(fid, '───────────────────────────────────────────────────────────────────\n');
+fprintf(fid, '  Lewis et al., 2010. Mol Syst Biol. pFBA metodolojisi\n');
+fprintf(fid, '  Brunk et al., 2018. Nat Biotechnol. Recon3D\n');
+fprintf(fid, '  Takabe et al., 2018. Pharmaceutics. GBM IC50\n');
+fprintf(fid, '  Fiorillo et al., 2016. Oncotarget. OCR/ECAR\n');
+fprintf(fid, '  Birth et al., 2014. Nat Commun. CIII yapısı\n');
+
+fclose(fid);
+fprintf('  ✓ Özet kaydedildi: %s\n', summaryFile);
+
+% =========================================================================
+% 10. FİGÜR ÜRETİMİ
+% =========================================================================
+fprintf('\n═══════════════════════════════════════════════════════════════════\n');
+fprintf(' ADIM 10: FİGÜR ÜRETİMİ\n');
+fprintf('═══════════════════════════════════════════════════════════════════\n');
+
+try
+    generate_figures(results);
+    fprintf('  ✓ Figürler oluşturuldu\n');
+catch ME
+    warning('Figür üretim hatası: %s', ME.message);
+end
+
+% =========================================================================
+% FİNAL RAPOR
+% =========================================================================
+totalElapsed = toc(totalStartTime);
+
+fprintf('\n');
+fprintf('████████████████████████████████████████████████████████████████████\n');
+fprintf('██                                                                ██\n');
+fprintf('██                    SİMÜLASYON TAMAMLANDI                       ██\n');
+fprintf('██                                                                ██\n');
+fprintf('████████████████████████████████████████████████████████████████████\n');
+fprintf('\n');
+fprintf('  Toplam süre     : %s\n', formatDuration(totalElapsed));
+fprintf('  Koşul sayısı    : %d\n', totalConditions);
+fprintf('  Başarılı        : %d\n', sum(results.feasible(:)));
+fprintf('  Başarısız       : %d\n', sum(~results.feasible(:)));
+fprintf('  Sonuç dosyası   : %s\n', matFile);
+fprintf('  Özet dosyası    : %s\n', summaryFile);
+fprintf('\n');
+fprintf('Bitiş: %s\n\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
+
+% =========================================================================
+% YARDIMCI FONKSİYON: Süre formatlama
+% =========================================================================
+function str = formatDuration(seconds)
+    if seconds < 60
+        str = sprintf('%.1f sn', seconds);
+    elseif seconds < 3600
+        mins = floor(seconds / 60);
+        secs = mod(seconds, 60);
+        str = sprintf('%d dk %.0f sn', mins, secs);
+    else
+        hours = floor(seconds / 3600);
+        mins = floor(mod(seconds, 3600) / 60);
+        str = sprintf('%d sa %d dk', hours, mins);
+    end
+end

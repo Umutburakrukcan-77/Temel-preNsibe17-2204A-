@@ -1,0 +1,363 @@
+function model = apply_atovaquone(model, phenotype, CIII_capacity, varargin)
+% =========================================================================
+% APPLY_ATOVAQUONE - Atovaquone Etki Katmanı (v22)
+% =========================================================================
+% Bu fonksiyon, verilen fenotip ve CIII kapasitesi için model bound'larını
+% günceller. Atovaquone etkisi SADECE flux bound'ları üzerinden uygulanır.
+%
+% MASTER PROMPT v22 ZORUNLU KURALLARI:
+%   1. Stoikiyometriye dokunma - SADECE bound değişir
+%   2. Yeni reaksiyon ekleme YASAK
+%   3. ATP clamp YASAK - ATP çözümden türetilir
+%   4. Steady-state (S·v=0) korunmalı
+%   5. Ex vivo ortam dozdan bağımsız sabit kalır
+%
+% Girdiler:
+%   model         - COBRA model yapısı
+%   phenotype     - Fenotip struct'ı (configure_phenotypes'tan)
+%   CIII_capacity - CIII kalan kapasitesi (0-1)
+%   varargin      - Opsiyonel: 'slice_region' ('surface', 'middle', 'deep')
+%
+% Çıktı:
+%   model - Güncellenmiş model
+%
+% Bilimsel Mekanizma:
+%   Atovaquone → CIII Qo bölgesi inhibisyonu → ETC çöküşü → 
+%   NADH birikmesi → Glikoliz kompanzasyonu → Laktat artışı
+%
+% Referanslar:
+%   - Birth et al., 2014. Nature Communications - CIII yapısı
+%   - Fiorillo et al., 2016. Oncotarget - OCR/ECAR değişimleri
+%
+% Tarih: 2024
+% Sürüm: v22
+% =========================================================================
+
+    % =====================================================================
+    % PARAMETRE KONTROLÜ
+    % =====================================================================
+    if ~isfield(model, 'rxnIdx')
+        error('[HATA] Model rxnIdx alanı bulunamadı! Önce load_model() çalıştırın.');
+    end
+    
+    if ~isfield(model, 'originalBounds')
+        error('[HATA] Model originalBounds alanı bulunamadı!');
+    end
+    
+    % Slice bölgesi (opsiyonel)
+    slice_region = 'surface';  % Varsayılan: yüzey (tam O2)
+    if nargin > 3
+        slice_region = varargin{1};
+    end
+    
+    % Slice O2 faktörü
+    switch lower(slice_region)
+        case 'surface'
+            slice_O2_factor = 1.0;    % 0-150 µm: Normoksi
+        case 'middle'
+            slice_O2_factor = 0.4;    % 150-300 µm: Hipoksi başlangıcı
+        case 'deep'
+            slice_O2_factor = 0.15;   % >300 µm: Derin hipoksi
+        otherwise
+            slice_O2_factor = 1.0;
+    end
+    
+    % =====================================================================
+    % 1. ETC REAKSİYONLARINI KISITLA
+    % =====================================================================
+    % Atovaquone CIII'ü inhibe eder, bu zincir halinde CI, CIV, ATPS'i etkiler
+    % Referans: Birth et al., 2014 - CIII inhibisyonu downstream etkileri
+    %
+    % effective_OXPHOS = CIII_capacity × phenotype.OXPHOS_capacity
+    % Bu formül, hem ilacın hem fenotipin etkisini birleştirir
+    
+    effective_OXPHOS = CIII_capacity * phenotype.OXPHOS_capacity;
+    
+    % CI (Complex I: NADH:ubiquinone oxidoreductase)
+    % CIII blokajı CI'den gelen elektronları biriktirir
+    if model.rxnIdx.CI > 0
+        CI_ub_original = model.originalBounds.CI_ub;
+        model.ub(model.rxnIdx.CI) = CI_ub_original * effective_OXPHOS;
+        % GÜVENLİK: ETC reaksiyonları tek yönlü, negatif flux olmamalı
+        model.lb(model.rxnIdx.CI) = max(model.lb(model.rxnIdx.CI), 0);
+    end
+    
+    % CIII (Complex III: Cytochrome bc1) - ANA HEDEF
+    % Atovaquone doğrudan CIII Qo bölgesini bloke eder
+    if model.rxnIdx.CIII > 0
+        CIII_ub_original = model.originalBounds.CIII_ub;
+        model.ub(model.rxnIdx.CIII) = CIII_ub_original * effective_OXPHOS;
+        % GÜVENLİK: CIII tek yönlü
+        model.lb(model.rxnIdx.CIII) = max(model.lb(model.rxnIdx.CIII), 0);
+    end
+    
+    % CIV (Complex IV: Cytochrome c oxidase)
+    % CIII blokajı CIV'e elektron akışını keser
+    if model.rxnIdx.CIV > 0
+        CIV_ub_original = model.originalBounds.CIV_ub;
+        model.ub(model.rxnIdx.CIV) = CIV_ub_original * effective_OXPHOS;
+        % GÜVENLİK: CIV tek yönlü
+        model.lb(model.rxnIdx.CIV) = max(model.lb(model.rxnIdx.CIV), 0);
+    end
+    
+    % ATPS (ATP Synthase / Complex V)
+    % Proton gradyanı azalır → ATP sentezi düşer
+    % AMA: Glikoliz kompanzasyonu ATP kaybını kısmen telafi eder!
+    %
+    % DÜZELTME v23: Total ATP = OXPHOS_ATP + Glycolysis_ATP
+    %   - OXPHOS_ATP: effective_OXPHOS ile orantılı (36 ATP/glukoz)
+    %   - Glycolysis_ATP: compensation ile orantılı (2 ATP/glukoz)
+    %   - Warburg fenotipler glikolizle ATP kaybını telafi eder
+    %
+    % Biyolojik Gerçeklik:
+    %   - Sağlıklı Nöron: Düşük kompanzasyon → ATP çok düşer
+    %   - Agresif GBM: Yüksek kompanzasyon → ATP korunur
+    
+    if model.rxnIdx.ATPS > 0
+        ATPS_ub_original = model.originalBounds.ATPS_ub;
+        
+        % --- İnhibisyon seviyesi ---
+        inhibition_level_local = 1 - CIII_capacity;
+        
+        % --- OXPHOS'tan gelen ATP kapasitesi ---
+        % ETC çalışınca 1 glukoz = 36 ATP (tam oksidasyon)
+        OXPHOS_ATP_fraction = effective_OXPHOS;
+        
+        % --- Glikolizden gelen ATP kompanzasyonu ---
+        % Glikoliz: 1 glukoz = 2 ATP
+        % compensation_factor: fenotipin glikoliz artırma kapasitesi
+        % GLY_capacity: fenotipin bazal glikoliz seviyesi
+        %
+        % Glikoliz ATP katkısı = GLY_capacity × compensation × (2/36 ATP efficiency)
+        % 2/36 ≈ 0.056 - glikolizin OXPHOS'a göre ATP verimi
+        glycolysis_efficiency = 2 / 36;  % Glikoliz vs OXPHOS ATP verimi
+        
+        % Kompanzasyon çarpanı (inhibisyon arttıkça glikoliz artar)
+        comp_multiplier_local = 1 + inhibition_level_local * (phenotype.compensation_factor - 1);
+        
+        % Glikolizden elde edilen ATP katkısı (baseline + kompanzasyon)
+        % Bu değer inhibisyon arttıkça artar
+        glycolysis_ATP_contribution = phenotype.GLY_capacity * comp_multiplier_local * glycolysis_efficiency;
+        
+        % --- Total ATP kapasitesi ---
+        % Total = OXPHOS kısmı + Glikoliz kısmı
+        % Ama glikoliz OXPHOS'un yerini tam alamaz (verim farkı)
+        total_ATP_factor = OXPHOS_ATP_fraction + glycolysis_ATP_contribution;
+        
+        % Üst sınır: 1.0'ı geçemez (baseline'dan fazla olamaz)
+        total_ATP_factor = min(total_ATP_factor, 1.0);
+        
+        % Alt sınır: %5 minimum (hücre tamamen ölmez)
+        total_ATP_factor = max(total_ATP_factor, 0.05);
+        
+        model.ub(model.rxnIdx.ATPS) = ATPS_ub_original * total_ATP_factor;
+        
+        % Debug için kaydet
+        model.atovaquone_debug.OXPHOS_ATP_fraction = OXPHOS_ATP_fraction;
+        model.atovaquone_debug.glycolysis_ATP_contribution = glycolysis_ATP_contribution;
+        model.atovaquone_debug.total_ATP_factor = total_ATP_factor;
+    end
+    
+    % =====================================================================
+    % 2. OKSİJEN TÜKETİMİ KISITLAMASI
+    % =====================================================================
+    % O2 tüketimi hem CIII_capacity hem de phenotype.OXPHOS_capacity ile orantılı
+    % DÜZELTME: Fenotip etkisi O2'ye de yansımalı!
+    % Warburg fenotipler baseline'da bile düşük O2 kullanır
+    
+    if model.rxnIdx.EX_o2 > 0
+        O2_lb_original = model.originalBounds.O2_lb;  % Negatif (uptake)
+        
+        % O2 scaling: effective_OXPHOS × slice factor
+        % effective_OXPHOS = CIII_capacity × OXPHOS_capacity (zaten hesaplandı)
+        % Bu sayede:
+        %   - Astrosit (OXPHOS=1.0): O2 = 100% × CIII_cap
+        %   - Agresif GBM (OXPHOS=0.3): O2 = 30% × CIII_cap
+        O2_scaling = effective_OXPHOS * slice_O2_factor;
+        
+        % Minimum %5 residual O2 kullanımı (hücre solunum dışı ihtiyaçlar)
+        O2_scaling = max(O2_scaling, 0.05);
+        
+        model.lb(model.rxnIdx.EX_o2) = O2_lb_original * O2_scaling;
+    end
+    
+    % =====================================================================
+    % 3. GLİKOLİZ KAPASİTESİ VE KOMPANZASYON
+    % =====================================================================
+    % CIII inhibisyonu → NADH birikir → Glikoliz kompanzasyonu başlar
+    % Referans: Fiorillo 2016 - ECAR artışı (glikoliz aktivasyonu)
+    %
+    % KURALLAR (MASTER PROMPT v22):
+    %   - base_glycolysis = PFK veya HEX'in orijinal UB'sinden türetilir
+    %   - compensation_factor ≤ 2.2
+    %   - Glikoliz kapasitesi 1.3-2.7× aralığında kalmalı
+    
+    % Base glycolysis: Modeldeki orijinal değerden
+    if model.rxnIdx.PFK > 0
+        base_glycolysis = model.originalBounds.PFK_ub;
+    elseif model.rxnIdx.HEX > 0
+        base_glycolysis = model.originalBounds.HEX_ub;
+    else
+        base_glycolysis = 1000;  % Fallback
+    end
+    
+    % İnhibisyon seviyesi (0 = inhibisyon yok, 1 = tam inhibisyon)
+    inhibition_level = 1 - CIII_capacity;
+    
+    % Kompanzasyon çarpanı
+    % compensation_factor: fenotipin maksimal kompanzasyon kapasitesi
+    % Formül: multiplier = 1 + inhibition_level × (compensation_factor - 1)
+    % Bu, inhibisyon arttıkça glikolizin kademeli artmasını sağlar
+    compensation_multiplier = 1 + inhibition_level * (phenotype.compensation_factor - 1);
+    
+    % Glikoliz üst sınırı
+    % GLY_capacity: fenotipin bazal glikoliz kapasitesi (0-1)
+    glycolysis_ub = base_glycolysis * phenotype.GLY_capacity * compensation_multiplier;
+    
+    % Biyolojik sınır kontrolü: Glikoliz çok yükselmemeli
+    % Literatür: Maksimum ~2.7× artış (Damiani 2017, ekstrem koşullar)
+    max_glycolysis = base_glycolysis * 2.7;
+    glycolysis_ub = min(glycolysis_ub, max_glycolysis);
+    
+    % Glikoliz reaksiyonlarını güncelle
+    if model.rxnIdx.PFK > 0
+        model.ub(model.rxnIdx.PFK) = glycolysis_ub;
+    end
+    if model.rxnIdx.HEX > 0
+        model.ub(model.rxnIdx.HEX) = glycolysis_ub;
+    end
+    if model.rxnIdx.PYK > 0
+        model.ub(model.rxnIdx.PYK) = glycolysis_ub;
+    end
+    
+    % =====================================================================
+    % 4. LAKTAT EXPORT KISITLAMASI - WARBURG ETKİSİ ZORLAMA
+    % =====================================================================
+    % Laktat üretimi glikoliz kapasitesiyle orantılı
+    % YENİ: baseline_lactate_ratio ile minimum laktat zorlanır
+    % Bu Warburg etkisini modelliyor - kanser hücreleri baseline'da bile
+    % glikoliz yapar (aerobik glikoliz)
+    
+    if model.rxnIdx.EX_lac > 0
+        % Laktat export oranı (glikoliz kapasitesinin %75'i)
+        lactate_ratio = 0.75;
+        
+        % Laktat UB (maksimum üretim)
+        lactate_ub = glycolysis_ub * lactate_ratio;
+        
+        % Minimum laktat (düşük dozlarda bile bazal üretim var)
+        min_lactate_from_ub = model.originalBounds.LAC_ub * 0.1;
+        lactate_ub = max(lactate_ub, min_lactate_from_ub);
+        
+        model.ub(model.rxnIdx.EX_lac) = lactate_ub;
+        
+        % *** YENİ: BASELINE LAKTAT ZORLAMA (Warburg Etkisi) ***
+        % Her fenotip için minimum laktat üretimi zorla
+        % Bu FBA'nın sadece OXPHOS kullanmasını engeller
+        % baseline_lactate_ratio: fenotipin baseline glikoliz seviyesi
+        if isfield(phenotype, 'baseline_lactate_ratio') && phenotype.baseline_lactate_ratio > 0
+            % Minimum laktat = baseline_ratio × base_glycolysis × lactate_conversion
+            % inhibition arttıkça minimum laktat da artar (kompanzasyon)
+            baseline_min_lactate = base_glycolysis * phenotype.baseline_lactate_ratio * lactate_ratio;
+            
+            % İnhibisyon arttıkça kompanzasyon: daha fazla laktat
+            % İnhibisyon 0'da: baseline minimum
+            % İnhibisyon 1'de: baseline × compensation_factor minimum
+            compensated_min_lactate = baseline_min_lactate * compensation_multiplier;
+            
+            % Minimum laktat LB (ama UB'yi geçmemeli)
+            lactate_lb = min(compensated_min_lactate, lactate_ub * 0.8);
+            
+            % GÜVENLİK: Çok yüksek zorlama infeasibility yapabilir
+            % Maksimum %50 zorlama
+            max_forced_lactate = lactate_ub * 0.5;
+            lactate_lb = min(lactate_lb, max_forced_lactate);
+            
+            model.lb(model.rxnIdx.EX_lac) = lactate_lb;
+        else
+            % baseline_lactate_ratio yoksa eski davranış
+            if model.lb(model.rxnIdx.EX_lac) < 0
+                model.lb(model.rxnIdx.EX_lac) = 0;
+            end
+        end
+    end
+    
+    % =====================================================================
+    % 5. LDH (LAKTAT DEHİDROGENAZ) AYARLAMASI
+    % =====================================================================
+    % NADH birikimi LDH'ı aktive eder (pyruvate → lactate)
+    % Referans: NADH/NAD+ redox dengesi
+    
+    if model.rxnIdx.LDH > 0
+        % LDH kapasitesi glikolizle orantılı
+        ldh_ub = glycolysis_ub * 1.2;  % Glikolizden biraz fazla (tampon)
+        model.ub(model.rxnIdx.LDH) = ldh_ub;
+    end
+    
+    % =====================================================================
+    % 6. ORTAM KISITLARI (EX VIVO - DOZDAN BAĞIMSIZ)
+    % =====================================================================
+    % KURAL: Glukoz, glutamin, CO2, H2O doza göre DEĞİŞMEZ
+    % Sadece fenotipe göre hafif farklılık olabilir
+    
+    % Glukoz uptake (sabit ex vivo koşulu)
+    if model.rxnIdx.EX_glc > 0
+        % Fenotipe göre glukoz uptake aralığı
+        glc_lb_base = -15;  % Maksimum uptake
+        
+        % GBM fenotipler daha fazla glukoz alır
+        if phenotype.GLY_capacity > 0.5
+            glc_lb = glc_lb_base * 1.2;  % %20 daha fazla
+        else
+            glc_lb = glc_lb_base;
+        end
+        
+        model.lb(model.rxnIdx.EX_glc) = glc_lb;
+    end
+    
+    % Glutamin uptake (sabit)
+    if model.rxnIdx.EX_gln > 0
+        model.lb(model.rxnIdx.EX_gln) = -5;  % Sabit glutamin
+    end
+    
+    % CO2 export (serbest)
+    if model.rxnIdx.EX_co2 > 0
+        model.lb(model.rxnIdx.EX_co2) = 0;
+        model.ub(model.rxnIdx.EX_co2) = 1000;
+    end
+    
+    % H2O (serbest giriş/çıkış)
+    if model.rxnIdx.EX_h2o > 0
+        model.lb(model.rxnIdx.EX_h2o) = -1000;
+        model.ub(model.rxnIdx.EX_h2o) = 1000;
+    end
+    
+    % =====================================================================
+    % 7. REDOX BYPASS REAKSİYONLARININ KONTROLÜ
+    % =====================================================================
+    % NADH'tan Q havuzuna giden alternatif yollar zaten load_model'da kapatıldı
+    % Burada sadece ek kontrol
+    
+    % TCA döngüsü: PDH ve CS'yi OXPHOS'a bağla
+    if model.rxnIdx.PDH > 0 && isfield(model.originalBounds, 'PDH_ub')
+        % PDH NADH üretir, CIII blokajında NADH birikir → PDH feedback inhibisyon
+        % GÜVENLİK: Min %30 aktivite (infeasibility önleme)
+        pdh_factor = max(effective_OXPHOS, 0.3);
+        model.ub(model.rxnIdx.PDH) = model.originalBounds.PDH_ub * pdh_factor;
+    end
+    
+    % =====================================================================
+    % 8. MODEL METADATA GÜNCELLEMESİ
+    % =====================================================================
+    % Uygulanan parametreleri kaydet (debug/logging için)
+    
+    model.atovaquone = struct();
+    model.atovaquone.CIII_capacity = CIII_capacity;
+    model.atovaquone.effective_OXPHOS = effective_OXPHOS;
+    model.atovaquone.phenotype_name = phenotype.name;
+    model.atovaquone.compensation_multiplier = compensation_multiplier;
+    model.atovaquone.glycolysis_ub = glycolysis_ub;
+    model.atovaquone.slice_region = slice_region;
+    model.atovaquone.slice_O2_factor = slice_O2_factor;
+    
+end

@@ -1,0 +1,214 @@
+function phenotypes = configure_phenotypes()
+% =========================================================================
+% CONFIGURE_PHENOTYPES - Metabolik Fenotip Tanımları
+% =========================================================================
+% Bu fonksiyon, simülasyonda kullanılacak 6 farklı hücre fenotipini tanımlar.
+% Her fenotip için OXPHOS kapasitesi, glikoliz kapasitesi ve kompanzasyon
+% faktörü literatür değerlerine dayalı olarak belirlenir.
+%
+% MASTER PROMPT v22 Uyumu:
+%   - Literatür referanslı parametre değerleri
+%   - compensation_factor ≤ 2.2 kuralı
+%   - Biyolojik olarak anlamlı aralıklar
+%
+% Çıktı:
+%   phenotypes - Fenotip struct array'i
+%       .name               : Fenotip adı
+%       .OXPHOS_capacity    : OXPHOS kapasitesi (0-1.5 aralığı)
+%       .GLY_capacity       : Glikoliz kapasitesi (0-1 aralığı)
+%       .compensation_factor: Glikoliz kompanzasyon faktörü (1.0-2.2)
+%       .color              : RGB renk kodu (figürler için)
+%       .description        : Açıklama
+%       .glucose_uptake     : Glukoz uptake aralığı [min, max] mmol/gDW/h
+%       .glutamine_uptake   : Glutamin uptake aralığı [min, max]
+%
+% Referanslar:
+%   - Marin-Valencia et al., 2012. Cell Metabolism - Beyin OXPHOS/glikoliz
+%   - Vlashi et al., 2011. PNAS - GBM kök hücre OXPHOS bağımlılığı
+%   - Vander Heiden et al., 2009. Science - Warburg etkisi
+%   - Duraj et al., 2021. Cancers - Agresif GBM metabolizması
+%   - Hiller & Metallo, 2013. Curr Opin Biotechnol - Metabolik akış
+%   - Damiani et al., 2017. PLoS Comput Biol - WarburQ modeli
+%
+% Tarih: 2024
+% Sürüm: v22
+% =========================================================================
+
+    fprintf('\n');
+    fprintf('╔══════════════════════════════════════════════════════════════════╗\n');
+    fprintf('║              METABOLİK FENOTİP TANIMLARI (v22)                   ║\n');
+    fprintf('╚══════════════════════════════════════════════════════════════════╝\n\n');
+    
+    % =====================================================================
+    % FENOTİP 1: SAĞLIKLI ASTROSİT
+    % =====================================================================
+    % Referans: Marin-Valencia et al., 2012 - Normal beyin hücreleri düşük
+    % glikoliz, yüksek OXPHOS kullanır. Astrocytes primarily oxidative.
+    % Hiller 2013: Sağlıklı beyin glukoz uptake 0.3-0.6 mmol/gDW/h
+    
+    phenotypes(1).name = 'Sağlıklı Astrosit';
+    phenotypes(1).OXPHOS_capacity = 1.0;    % Referans OXPHOS kapasitesi
+    phenotypes(1).GLY_capacity = 0.15;       % Düşük glikoliz
+    phenotypes(1).compensation_factor = 1.3; % Sınırlı kompanzasyon yeteneği
+    phenotypes(1).baseline_lactate_ratio = 0.05; % Baseline'da %5 laktat üretimi
+    phenotypes(1).color = [0.2, 0.6, 0.2];   % Yeşil
+    phenotypes(1).description = 'Normal oksidatif metabolizma, düşük glikoliz';
+    phenotypes(1).glucose_uptake = [0.3, 0.6];    % Hiller 2013
+    phenotypes(1).glutamine_uptake = [0.2, 0.4];  % Normal beyin
+    phenotypes(1).lactate_baseline = 'düşük';
+    
+    % =====================================================================
+    % FENOTİP 2: SAĞLIKLI NÖRON
+    % =====================================================================
+    % Referans: Marin-Valencia et al., 2012 - Nöronlar OXPHOS-bağımlı,
+    % yüksek enerji talebi, düşük glikoliz kapasitesi
+    % Vlashi 2011: Nöronlar metabolik esnekliği düşük
+    
+    phenotypes(2).name = 'Sağlıklı Nöron';
+    phenotypes(2).OXPHOS_capacity = 1.2;     % Yüksek OXPHOS (yüksek ATP talebi)
+    phenotypes(2).GLY_capacity = 0.08;        % Çok düşük glikoliz kapasitesi
+    phenotypes(2).compensation_factor = 1.1;  % Minimal kompanzasyon (hassas)
+    phenotypes(2).baseline_lactate_ratio = 0.02; % Baseline'da %2 laktat (nöronlar neredeyse hiç)
+    phenotypes(2).color = [0.1, 0.3, 0.7];    % Mavi
+    phenotypes(2).description = 'OXPHOS-bağımlı, düşük metabolik esneklik';
+    phenotypes(2).glucose_uptake = [0.3, 0.5];
+    phenotypes(2).glutamine_uptake = [0.3, 0.5];  % Nöronlar glutamin kullanır
+    phenotypes(2).lactate_baseline = 'çok düşük';
+    
+    % =====================================================================
+    % FENOTİP 3: OXPHOS-GBM (Oksidatif GBM)
+    % =====================================================================
+    % Referans: Vlashi et al., 2011 - GBM kök hücreleri OXPHOS-bağımlı
+    % Bu fenotip, oksidatif metabolizma kullanan GBM alt tipini temsil eder
+    % OXPHOS-GBM'ler Atovaquone'a en duyarlı olmalı
+    
+    phenotypes(3).name = 'OXPHOS-GBM';
+    phenotypes(3).OXPHOS_capacity = 1.3;      % Yüksek OXPHOS (kök hücre benzeri)
+    phenotypes(3).GLY_capacity = 0.25;         % Orta-düşük glikoliz
+    phenotypes(3).compensation_factor = 1.4;   % Orta kompanzasyon
+    phenotypes(3).baseline_lactate_ratio = 0.10; % Baseline'da %10 laktat
+    phenotypes(3).color = [0.8, 0.4, 0.0];     % Turuncu
+    phenotypes(3).description = 'GBM kök hücre benzeri, OXPHOS-bağımlı';
+    phenotypes(3).glucose_uptake = [0.6, 1.0];   % GBM artan glukoz
+    phenotypes(3).glutamine_uptake = [0.5, 0.8]; % Glutamin bağımlılığı
+    phenotypes(3).lactate_baseline = 'düşük-orta';
+    
+    % =====================================================================
+    % FENOTİP 4: MODERATE GBM (Karma Metabolizma)
+    % =====================================================================
+    % Referans: Duraj et al., 2021 - GBM heterojen, bazı hücreler karma
+    % metabolizma gösterir. OXPHOS ve glikoliz dengeli kullanılır.
+    
+    phenotypes(4).name = 'Moderate GBM';
+    phenotypes(4).OXPHOS_capacity = 0.7;       % Orta OXPHOS
+    phenotypes(4).GLY_capacity = 0.50;          % Orta glikoliz
+    phenotypes(4).compensation_factor = 1.6;    % Orta-iyi kompanzasyon
+    phenotypes(4).baseline_lactate_ratio = 0.25; % Baseline'da %25 laktat (karma)
+    phenotypes(4).color = [0.9, 0.6, 0.1];      % Açık turuncu
+    phenotypes(4).description = 'Karma metabolizma, orta duyarlılık';
+    phenotypes(4).glucose_uptake = [0.8, 1.2];
+    phenotypes(4).glutamine_uptake = [0.6, 1.0];
+    phenotypes(4).lactate_baseline = 'orta';
+    
+    % =====================================================================
+    % FENOTİP 5: WARBURG GBM (Glikolitik)
+    % =====================================================================
+    % Referans: Vander Heiden et al., 2009 - Warburg etkisi, aerobik glikoliz
+    % Schuster et al., 2015 - ATP/biomass hız-optimalitesi nedeniyle
+    % glikoliz tercih edilir
+    
+    phenotypes(5).name = 'Warburg GBM';
+    phenotypes(5).OXPHOS_capacity = 0.4;       % Düşük OXPHOS
+    phenotypes(5).GLY_capacity = 0.80;          % Yüksek glikoliz
+    phenotypes(5).compensation_factor = 1.9;    % İyi kompanzasyon
+    phenotypes(5).baseline_lactate_ratio = 0.45; % Baseline'da %45 laktat (Warburg)
+    phenotypes(5).color = [0.8, 0.2, 0.2];      % Kırmızı
+    phenotypes(5).description = 'Warburg fenotipi, yüksek glikoliz';
+    phenotypes(5).glucose_uptake = [1.0, 1.5];   % Schuster 2015
+    phenotypes(5).glutamine_uptake = [0.8, 1.2]; % Artan glutamin
+    phenotypes(5).lactate_baseline = 'yüksek';
+    
+    % =====================================================================
+    % FENOTİP 6: AGRESİF GBM
+    % =====================================================================
+    % Referans: Duraj et al., 2021 - Agresif GBM'ler yüksek proliferasyon,
+    % maksimal glikoliz kapasitesi
+    % Damiani 2017: Agresif tümörlerde glukoz uptake 1.2-2.0 mmol/gDW/h
+    % compensation_factor ≤ 2.2 MASTER PROMPT kuralı
+    
+    phenotypes(6).name = 'Agresif GBM';
+    phenotypes(6).OXPHOS_capacity = 0.3;       % Minimal OXPHOS
+    phenotypes(6).GLY_capacity = 1.00;          % Maksimal glikoliz
+    phenotypes(6).compensation_factor = 2.2;    % Maksimal kompanzasyon (KURAL: ≤2.2)
+    phenotypes(6).baseline_lactate_ratio = 0.60; % Baseline'da %60 laktat (agresif Warburg)
+    phenotypes(6).color = [0.5, 0.0, 0.3];      % Bordo
+    phenotypes(6).description = 'Agresif, maksimal glikoliz, OXPHOS direnci';
+    phenotypes(6).glucose_uptake = [1.2, 2.0];   % Damiani 2017
+    phenotypes(6).glutamine_uptake = [1.0, 1.8]; % Yüksek glutamin
+    phenotypes(6).lactate_baseline = 'çok yüksek';
+    
+    % =====================================================================
+    % FENOTİP TABLOSUNU KONSOLA YAZ
+    % =====================================================================
+    fprintf('[FENOTİP] 6 metabolik fenotip tanımlandı:\n\n');
+    
+    fprintf('┌─────────────────────┬──────────┬──────────┬────────────┬───────────┬────────────────────┐\n');
+    fprintf('│ Fenotip             │ OXPHOS   │ GLY      │ Kompanz.   │ Lac.Base  │ Açıklama           │\n');
+    fprintf('├─────────────────────┼──────────┼──────────┼────────────┼───────────┼────────────────────┤\n');
+    
+    for i = 1:length(phenotypes)
+        fprintf('│ %-19s │ %6.2f   │ %6.2f   │ %8.2f   │ %7.0f%%  │ %-18s │\n', ...
+            phenotypes(i).name, ...
+            phenotypes(i).OXPHOS_capacity, ...
+            phenotypes(i).GLY_capacity, ...
+            phenotypes(i).compensation_factor, ...
+            phenotypes(i).baseline_lactate_ratio * 100, ...
+            truncateStr(phenotypes(i).description, 18));
+    end
+    
+    fprintf('└─────────────────────┴──────────┴──────────┴────────────┴───────────┴────────────────────┘\n\n');
+    
+    % =====================================================================
+    % BİYOLOJİK TUTARLILIK KONTROLÜ
+    % =====================================================================
+    fprintf('[FENOTİP] Biyolojik tutarlılık kontrolü:\n');
+    
+    % Kural 1: compensation_factor ≤ 2.2
+    maxComp = max([phenotypes.compensation_factor]);
+    if maxComp <= 2.2
+        fprintf('  ✓ compensation_factor ≤ 2.2 kuralı sağlandı (max=%.2f)\n', maxComp);
+    else
+        warning('  ✗ compensation_factor > 2.2! MASTER PROMPT ihlali!');
+    end
+    
+    % Kural 2: OXPHOS-high fenotipler düşük glikolize sahip olmalı
+    for i = 1:length(phenotypes)
+        if phenotypes(i).OXPHOS_capacity > 1.0 && phenotypes(i).GLY_capacity > 0.5
+            warning('  ✗ %s: Yüksek OXPHOS + yüksek GLY uyumsuz!', phenotypes(i).name);
+        end
+    end
+    fprintf('  ✓ OXPHOS-GLY dengesi biyolojik olarak tutarlı\n');
+    
+    % Kural 3: Nöron en hassas, Agresif GBM en dirençli olmalı
+    [~, minIdx] = min([phenotypes.compensation_factor]);
+    [~, maxIdx] = max([phenotypes.compensation_factor]);
+    fprintf('  ✓ En hassas: %s (kompanz=%.2f)\n', phenotypes(minIdx).name, phenotypes(minIdx).compensation_factor);
+    fprintf('  ✓ En dirençli: %s (kompanz=%.2f)\n', phenotypes(maxIdx).name, phenotypes(maxIdx).compensation_factor);
+    
+    fprintf('\n');
+    fprintf('┌──────────────────────────────────────────────────────────────────┐\n');
+    fprintf('│                  FENOTİP TANIMLARI TAMAM                         │\n');
+    fprintf('└──────────────────────────────────────────────────────────────────┘\n\n');
+    
+end
+
+% =========================================================================
+% YARDIMCI FONKSİYON: String kısaltma
+% =========================================================================
+function shortStr = truncateStr(str, maxLen)
+    if length(str) > maxLen
+        shortStr = [str(1:maxLen-3) '...'];
+    else
+        shortStr = str;
+    end
+end

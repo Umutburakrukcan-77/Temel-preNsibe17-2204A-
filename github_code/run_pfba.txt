@@ -1,0 +1,287 @@
+function solution = run_pfba(model)
+% =========================================================================
+% RUN_PFBA - İki Aşamalı pFBA Çözümü (Lewis 2010)
+% =========================================================================
+% Bu fonksiyon, MASTER PROMPT v22'nin zorunlu kıldığı iki aşamalı pFBA
+% prosedürünü uygular:
+%
+% ADIM 1: FBA ile biomass maksimizasyonu
+% ADIM 2: Optimum biomass altında toplam flux minimizasyonu
+%
+% ZORUNLU KURALLAR (MASTER PROMPT v22):
+%   1. Objective = BIOMASS (ATP synthase DEĞİL!)
+%   2. Her koşul için pFBA ZORUNLU
+%   3. ATP sadece ölçülür, clamp edilmez
+%   4. Infeasible durumlar açıkça raporlanır
+%
+% Girdiler:
+%   model - COBRA model yapısı (apply_atovaquone sonrası)
+%
+% Çıktılar:
+%   solution - Çözüm struct'ı
+%       .feasible       : Fizibilite durumu (true/false)
+%       .biomass        : Biomass flux'ı
+%       .ATP            : ATP synthase flux'ı
+%       .O2             : O2 uptake (negatif = uptake)
+%       .lactate        : Laktat export (pozitif = export)
+%       .glucose        : Glukoz uptake (negatif = uptake)
+%       .CIII_flux      : Complex III flux'ı
+%       .CI_flux        : Complex I flux'ı
+%       .CIV_flux       : Complex IV flux'ı
+%       .fullSolution   : Tüm flux vektörü
+%       .method         : Kullanılan yöntem ('pFBA' veya 'FBA-fallback')
+%
+% Referanslar:
+%   Lewis et al., 2010. Molecular Systems Biology - pFBA metodolojisi
+%
+% Tarih: 2024
+% Sürüm: v22
+% =========================================================================
+
+    % =====================================================================
+    % ÇÖZÜM YAPISINI BAŞLAT
+    % =====================================================================
+    solution = struct();
+    solution.feasible = false;
+    solution.biomass = 0;
+    solution.ATP = 0;
+    solution.O2 = 0;
+    solution.lactate = 0;
+    solution.glucose = 0;
+    solution.CIII_flux = 0;
+    solution.CI_flux = 0;
+    solution.CIV_flux = 0;
+    solution.glutamine = 0;
+    solution.fullSolution = [];
+    solution.method = 'none';
+    solution.status = 0;
+    solution.message = '';
+    
+    % =====================================================================
+    % BIOMASS REAKSİYONUNU BELİRLE
+    % =====================================================================
+    % KURAL: Objective DAIMA biomass olmalı, ATP DEĞİL!
+    
+    biomassIdx = model.rxnIdx.biomass;
+    
+    if biomassIdx <= 0
+        % Biomass bulunamazsa alternatif ara
+        possibleBiomass = {'biomass_reaction', 'biomass_maintenance', ...
+            'DM_biomass', 'Biomass', 'BIOMASS', 'biomass'};
+        
+        for i = 1:length(possibleBiomass)
+            idx = find(contains(model.rxns, possibleBiomass{i}, 'IgnoreCase', true));
+            if ~isempty(idx)
+                biomassIdx = idx(1);
+                break;
+            end
+        end
+    end
+    
+    if biomassIdx <= 0
+        solution.message = 'Biomass reaksiyonu bulunamadı!';
+        warning('[pFBA] %s', solution.message);
+        return;
+    end
+    
+    % =====================================================================
+    % ADIM 1: FBA İLE BIOMASS MAKSİMİZASYONU
+    % =====================================================================
+    % Referans: Lewis et al., 2010 - İlk adım optimal objective bulma
+    
+    % Objective'i ayarla
+    model.c = zeros(length(model.rxns), 1);
+    model.c(biomassIdx) = 1;  % Biomass maksimize
+    
+    % FBA çöz
+    try
+        FBAsolution = optimizeCbModel(model, 'max');
+    catch ME
+        solution.message = sprintf('FBA hatası: %s', ME.message);
+        warning('[pFBA] %s', solution.message);
+        return;
+    end
+    
+    % Fizibilite kontrolü
+    if FBAsolution.stat ~= 1
+        solution.message = 'FBA infeasible - model çözümsüz';
+        solution.status = FBAsolution.stat;
+        return;
+    end
+    
+    f_opt = FBAsolution.f;  % Optimum biomass değeri
+    
+    if f_opt < 1e-9
+        solution.message = 'Biomass sıfır - hücre büyümesi yok';
+        solution.feasible = true;  % Teknik olarak fizibıl ama büyüme yok
+        solution.biomass = 0;
+        solution.fullSolution = FBAsolution.v;
+        solution.method = 'FBA-zero-growth';
+        
+        % Diğer flux'ları oku (büyüme olmasa bile)
+        solution = extractFluxes(solution, model, FBAsolution.v);
+        return;
+    end
+    
+    % =====================================================================
+    % ADIM 2: OPTİMUM BIOMASS ALTINDA FLUX MİNİMİZASYONU (pFBA)
+    % =====================================================================
+    % Referans: Lewis et al., 2010 - Parsimony prensibi
+    % Biomass değerini %99.9'a sabitle, toplam flux'ı minimize et
+    
+    % Biomass alt sınırını ayarla (%99.9 optimal)
+    biomass_threshold = 0.999;
+    model.lb(biomassIdx) = f_opt * biomass_threshold;
+    
+    % pFBA çözümü - COBRA Toolbox'ın minimizeModelFlux fonksiyonunu kullan
+    pFBA_success = false;
+    flux_vector = [];
+    
+    % YÖNTEM 1: COBRA minimizeModelFlux - L1 norm (Taxicab)
+    try
+        % minimizeModelFlux(model, 'min', 'one') - L1 minimizasyon
+        [MinimizedFlux, ~] = minimizeModelFlux(model, 'min', 'one');
+        
+        if MinimizedFlux.stat == 1 && ~isempty(MinimizedFlux.v)
+            pFBA_success = true;
+            flux_vector = MinimizedFlux.v;
+            solution.method = 'pFBA-COBRA-L1';
+        end
+    catch ME1
+        % minimizeModelFlux başarısız
+        pFBA_success = false;
+    end
+    
+    % YÖNTEM 2: COBRA minimizeModelFlux - varsayılan (L2 benzeri)
+    if ~pFBA_success
+        try
+            [MinimizedFlux, ~] = minimizeModelFlux(model, 'min');
+            
+            if MinimizedFlux.stat == 1 && ~isempty(MinimizedFlux.v)
+                pFBA_success = true;
+                flux_vector = MinimizedFlux.v;
+                solution.method = 'pFBA-COBRA-default';
+            end
+        catch ME2
+            pFBA_success = false;
+        end
+    end
+    
+    % YÖNTEM 3: optimizeCbModel ile minNorm
+    if ~pFBA_success
+        try
+            % optimizeCbModel 'minNorm' seçeneği ile
+            pFBAsol = optimizeCbModel(model, 'max', 'one');
+            
+            if pFBAsol.stat == 1 && ~isempty(pFBAsol.v)
+                pFBA_success = true;
+                flux_vector = pFBAsol.v;
+                solution.method = 'pFBA-optimizeCbModel';
+            end
+        catch ME3
+            pFBA_success = false;
+        end
+    end
+    
+    % YÖNTEM 4: Manuel FBA fallback
+    if ~pFBA_success
+        warning('[pFBA] COBRA pFBA fonksiyonları başarısız, FBA çözümü kullanılıyor.');
+        flux_vector = FBAsolution.v;
+        solution.method = 'FBA-fallback';
+    end
+    
+    % =====================================================================
+    % ÇÖZÜM FİZİBİLİTE KONTROLÜ
+    % =====================================================================
+    if isempty(flux_vector)
+        solution.message = 'Flux vektörü boş';
+        return;
+    end
+    
+    solution.feasible = true;
+    solution.fullSolution = flux_vector;
+    solution.status = 1;
+    
+    % =====================================================================
+    % FLUX DEĞERLERİNİ ÇIKAR
+    % =====================================================================
+    solution = extractFluxes(solution, model, flux_vector);
+    
+    % =====================================================================
+    % KALİTE KONTROLÜ
+    % =====================================================================
+    % KURAL: ATP > 0, O2 tüketimi < 0 (uptake) olmalı
+    
+    if solution.ATP < 0
+        warning('[pFBA] Negatif ATP! Değer: %.2f', solution.ATP);
+    end
+    
+    if solution.O2 > 0 && model.rxnIdx.EX_o2 > 0
+        % O2 export (anormal - muhtemelen exchange yönü)
+        % Bazı modellerde O2 uptake pozitif olabilir
+    end
+    
+end
+
+% =========================================================================
+% YARDIMCI FONKSİYON: Flux değerlerini çıkar
+% =========================================================================
+function solution = extractFluxes(solution, model, flux_vector)
+    
+    % Biomass
+    if model.rxnIdx.biomass > 0
+        solution.biomass = flux_vector(model.rxnIdx.biomass);
+    end
+    
+    % ATP Synthase
+    if model.rxnIdx.ATPS > 0
+        solution.ATP = flux_vector(model.rxnIdx.ATPS);
+    end
+    
+    % O2 uptake (negatif = uptake konvansiyonu)
+    if model.rxnIdx.EX_o2 > 0
+        solution.O2 = flux_vector(model.rxnIdx.EX_o2);
+    end
+    
+    % Laktat export (pozitif = export)
+    if model.rxnIdx.EX_lac > 0
+        solution.lactate = flux_vector(model.rxnIdx.EX_lac);
+    end
+    
+    % Glukoz uptake (negatif = uptake)
+    if model.rxnIdx.EX_glc > 0
+        solution.glucose = flux_vector(model.rxnIdx.EX_glc);
+    end
+    
+    % Glutamin uptake
+    if model.rxnIdx.EX_gln > 0
+        solution.glutamine = flux_vector(model.rxnIdx.EX_gln);
+    end
+    
+    % ETC flux'ları
+    if model.rxnIdx.CIII > 0
+        solution.CIII_flux = flux_vector(model.rxnIdx.CIII);
+    end
+    
+    if model.rxnIdx.CI > 0
+        solution.CI_flux = flux_vector(model.rxnIdx.CI);
+    end
+    
+    if model.rxnIdx.CIV > 0
+        solution.CIV_flux = flux_vector(model.rxnIdx.CIV);
+    end
+    
+    % Glikoliz flux'ları
+    if model.rxnIdx.PFK > 0
+        solution.PFK_flux = flux_vector(model.rxnIdx.PFK);
+    else
+        solution.PFK_flux = 0;
+    end
+    
+    if model.rxnIdx.LDH > 0
+        solution.LDH_flux = flux_vector(model.rxnIdx.LDH);
+    else
+        solution.LDH_flux = 0;
+    end
+    
+end

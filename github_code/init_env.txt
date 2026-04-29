@@ -1,0 +1,149 @@
+function init_env()
+% =========================================================================
+% INIT_ENV - COBRA Toolbox Ortam Kurulumu
+% =========================================================================
+% Bu fonksiyon, COBRA Toolbox'ı başlatır ve en uygun LP çözücüyü seçer.
+%
+% MASTER PROMPT v22 Uyumu:
+%   - Türkçe çıktılar
+%   - Otomatik çözücü seçimi (Gurobi > CPLEX > GLPK)
+%   - Hata durumlarında detaylı mesajlar
+%
+% Referanslar:
+%   Heirendt et al., 2019. Nature Protocols. COBRA Toolbox 3.0
+%
+% Tarih: 2024
+% Sürüm: v22
+% =========================================================================
+
+    fprintf('\n');
+    fprintf('╔══════════════════════════════════════════════════════════════════╗\n');
+    fprintf('║     ATOVAQUONE-GBM pFBA SİMÜLASYON PLATFORMU - ORTAM KURULUMU    ║\n');
+    fprintf('╚══════════════════════════════════════════════════════════════════╝\n\n');
+    
+    % =====================================================================
+    % 1. COBRA TOOLBOX PATH EKLEME
+    % =====================================================================
+    fprintf('[ORTAM] COBRA Toolbox yolu ekleniyor...\n');
+    
+    % Olası COBRA Toolbox konumları
+    possiblePaths = {
+        fullfile(pwd, 'cobratoolbox'),
+        fullfile(pwd, '..', 'cobratoolbox'),
+        fullfile(fileparts(mfilename('fullpath')), '..', 'cobratoolbox'),
+        'C:\cobratoolbox',
+        'C:\Users\burak\cobratoolbox'
+    };
+    
+    cobraFound = false;
+    for i = 1:length(possiblePaths)
+        if exist(possiblePaths{i}, 'dir')
+            addpath(genpath(possiblePaths{i}));
+            fprintf('  ✓ COBRA Toolbox bulundu: %s\n', possiblePaths{i});
+            cobraFound = true;
+            break;
+        end
+    end
+    
+    if ~cobraFound
+        error('[HATA] COBRA Toolbox bulunamadı! Lütfen cobratoolbox klasörünün varlığını kontrol edin.');
+    end
+    
+    % =====================================================================
+    % 2. COBRA TOOLBOX BAŞLATMA
+    % =====================================================================
+    fprintf('[ORTAM] COBRA Toolbox başlatılıyor...\n');
+    
+    try
+        % initCobraToolbox'ı sessiz modda çalıştır
+        evalc('initCobraToolbox(false)');
+        fprintf('  ✓ COBRA Toolbox başarıyla başlatıldı\n');
+    catch ME
+        warning('[UYARI] COBRA Toolbox başlatma hatası: %s', ME.message);
+        fprintf('  → Devam ediliyor (toolbox zaten yüklenmiş olabilir)...\n');
+    end
+    
+    % =====================================================================
+    % 3. LP ÇÖZÜCÜ SEÇİMİ
+    % =====================================================================
+    fprintf('[ORTAM] LP çözücü seçiliyor...\n');
+    
+    % Çözücü öncelik sırası - GLPK önce (Gurobi lisans sorunu nedeniyle)
+    solverPriority = {'glpk', 'gurobi', 'ibm_cplex'};
+    solverNames = {'GLPK', 'Gurobi', 'IBM CPLEX'};
+    
+    selectedSolver = '';
+    
+    for i = 1:length(solverPriority)
+        solver = solverPriority{i};
+        try
+            % Çözücüyü değiştir
+            solverOK = changeCobraSolver(solver, 'LP', 0);
+            
+            if solverOK
+                selectedSolver = solver;
+                fprintf('  ✓ %s çözücüsü seçildi\n', solverNames{i});
+                break;
+            else
+                fprintf('  ✗ %s kullanılamıyor\n', solverNames{i});
+            end
+        catch
+            fprintf('  ✗ %s kullanılamıyor\n', solverNames{i});
+        end
+    end
+    
+    if isempty(selectedSolver)
+        error('[HATA] Kullanılabilir LP çözücü bulunamadı! Gurobi, CPLEX veya GLPK yükleyin.');
+    end
+    
+    % =====================================================================
+    % 4. ÇALIŞMA DİZİNİ KONTROLÜ
+    % =====================================================================
+    fprintf('[ORTAM] Çalışma dizini kontrol ediliyor...\n');
+    
+    % results ve figures klasörlerini oluştur
+    projectRoot = fileparts(fileparts(mfilename('fullpath')));
+    
+    resultsDir = fullfile(projectRoot, 'results');
+    figuresDir = fullfile(projectRoot, 'figures');
+    
+    if ~exist(resultsDir, 'dir')
+        mkdir(resultsDir);
+        fprintf('  ✓ results/ klasörü oluşturuldu\n');
+    else
+        fprintf('  ✓ results/ klasörü mevcut\n');
+    end
+    
+    if ~exist(figuresDir, 'dir')
+        mkdir(figuresDir);
+        fprintf('  ✓ figures/ klasörü oluşturuldu\n');
+    else
+        fprintf('  ✓ figures/ klasörü mevcut\n');
+    end
+    
+    % =====================================================================
+    % 5. ORTAM BİLGİSİ ÖZETİ
+    % =====================================================================
+    fprintf('\n');
+    fprintf('┌──────────────────────────────────────────────────────────────────┐\n');
+    fprintf('│                      ORTAM KURULUMU TAMAM                        │\n');
+    fprintf('├──────────────────────────────────────────────────────────────────┤\n');
+    fprintf('│  LP Çözücü      : %-45s │\n', upper(selectedSolver));
+    fprintf('│  MATLAB Sürümü  : %-45s │\n', version);
+    fprintf('│  Proje Dizini   : %-45s │\n', truncatePath(projectRoot, 45));
+    fprintf('│  Tarih          : %-45s │\n', datestr(now, 'yyyy-mm-dd HH:MM:SS'));
+    fprintf('└──────────────────────────────────────────────────────────────────┘\n');
+    fprintf('\n');
+    
+end
+
+% =========================================================================
+% YARDIMCI FONKSİYON: Uzun path'leri kısaltma
+% =========================================================================
+function shortPath = truncatePath(fullPath, maxLen)
+    if length(fullPath) > maxLen
+        shortPath = ['...' fullPath(end-maxLen+4:end)];
+    else
+        shortPath = fullPath;
+    end
+end
