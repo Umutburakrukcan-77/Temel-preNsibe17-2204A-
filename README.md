@@ -1,0 +1,1 @@
+# Temel-preNsibe17-2204A-
